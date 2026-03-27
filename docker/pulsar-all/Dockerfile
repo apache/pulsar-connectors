@@ -17,7 +17,7 @@
 # under the License.
 #
 
-ARG PULSAR_IMAGE=apachepulsar/pulsar:latest
+ARG PULSAR_IMAGE
 FROM ${PULSAR_IMAGE}
 
 # Copy connector NARs into the connectors directory
