@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 #
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
@@ -17,28 +18,10 @@
 # under the License.
 #
 
-ARG PULSAR_IMAGE
+source /pulsar/bin/func-lib.sh
 
-FROM ${PULSAR_IMAGE}
+# sets dbStorage_writeCacheMaxSizeMb and dbStorage_readAheadCacheMaxSizeMb if not already defined
+export dbStorage_writeCacheMaxSizeMb="${dbStorage_writeCacheMaxSizeMb:-16}"
+export dbStorage_readAheadCacheMaxSizeMb="${dbStorage_readAheadCacheMaxSizeMb:-16}"
 
-USER root
-
-RUN apk add --no-cache supervisor procps curl
-
-RUN mkdir -p /var/log/pulsar /var/run/supervisor/
-
-# Copy supervisor config
-COPY conf/ /etc/supervisord/conf.d/
-RUN mv /etc/supervisord/conf.d/supervisord.conf /etc/supervisord.conf
-
-# Copy test scripts (run-local-zk.sh, run-broker.sh, etc.)
-COPY scripts/ /pulsar/bin/
-RUN chmod a+rx /pulsar/bin/*.sh
-
-# Copy connector NARs
-COPY connectors/ /pulsar/connectors/
-
-# Copy TLS test certificates
-COPY certificate-authority/ /pulsar/certificate-authority/
-
-CMD ["bash"]
+run_pulsar_component bookkeeper bookie 128M -XX:MaxDirectMemorySize=512M

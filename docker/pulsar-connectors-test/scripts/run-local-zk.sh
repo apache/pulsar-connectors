@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 #
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
@@ -17,28 +18,6 @@
 # under the License.
 #
 
-ARG PULSAR_IMAGE
+source /pulsar/bin/func-lib.sh
 
-FROM ${PULSAR_IMAGE}
-
-USER root
-
-RUN apk add --no-cache supervisor procps curl
-
-RUN mkdir -p /var/log/pulsar /var/run/supervisor/
-
-# Copy supervisor config
-COPY conf/ /etc/supervisord/conf.d/
-RUN mv /etc/supervisord/conf.d/supervisord.conf /etc/supervisord.conf
-
-# Copy test scripts (run-local-zk.sh, run-broker.sh, etc.)
-COPY scripts/ /pulsar/bin/
-RUN chmod a+rx /pulsar/bin/*.sh
-
-# Copy connector NARs
-COPY connectors/ /pulsar/connectors/
-
-# Copy TLS test certificates
-COPY certificate-authority/ /pulsar/certificate-authority/
-
-CMD ["bash"]
+run_pulsar_component zookeeper local-zk 128M

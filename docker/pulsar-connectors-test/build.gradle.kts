@@ -26,7 +26,7 @@ val catalog = extensions.getByType<VersionCatalogsExtension>().named("libs")
 val pulsarVersion = catalog.findVersion("pulsar").get().requiredVersion
 val dockerOrganization = (findProperty("docker.organization") as String?) ?: "apachepulsar"
 val dockerTag = (findProperty("docker.tag") as String?) ?: "latest"
-val pulsarImage = (findProperty("pulsar.image") as String?) ?: "${dockerOrganization}/pulsar-test-latest-version:${pulsarVersion}"
+val pulsarImage = (findProperty("pulsar.image") as String?) ?: "${dockerOrganization}/pulsar:${pulsarVersion}"
 
 // Connector projects that produce NAR files
 val connectorProjects = listOf(
@@ -62,6 +62,9 @@ val prepareBuildContext by tasks.registering(Sync::class) {
     from("${rootDir}/tests/certificate-authority") {
         into("certificate-authority")
     }
+    // Test scripts and supervisor config
+    from("scripts") { into("scripts") }
+    from("conf") { into("conf") }
     // Dockerfile
     from("Dockerfile")
 
