@@ -20,6 +20,19 @@
 plugins {
     alias(libs.plugins.nar)
 }
+// Solr 9.x embeds Jetty 10.x, which is incompatible with Pulsar's Jetty 12.
+// The pulsar-dependencies platform enforces Jetty 12 strict versions, which override
+// enforcedPlatform("jetty-bom:10.0.24") because Gradle picks the highest strict version.
+// Use resolutionStrategy.force to downgrade Jetty to 10.0.24 for test configurations.
+val jetty10Version = "10.0.24"
+configurations.matching { it.name.startsWith("test") }.configureEach {
+    resolutionStrategy.eachDependency {
+        if (requested.group.startsWith("org.eclipse.jetty")) {
+            useVersion(jetty10Version)
+        }
+    }
+}
+
 dependencies {
     implementation(libs.pulsar.io.common)
     implementation(libs.pulsar.io.core)
@@ -32,10 +45,6 @@ dependencies {
     implementation(libs.commons.lang3)
     implementation(libs.commons.collections4)
 
-    // Solr 9.x requires Jetty 10.x — force Jetty 10 for test deps to avoid
-    // conflicts with Pulsar's Jetty 12 which has incompatible class locations.
-    // Use enforcedPlatform to override Gradle's default highest-version-wins resolution.
-    testImplementation(enforcedPlatform("org.eclipse.jetty:jetty-bom:10.0.24"))
     testImplementation(libs.solr.test.framework)
     testImplementation(libs.solr.core)
 }

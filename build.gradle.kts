@@ -92,6 +92,9 @@ subprojects {
 
     apply(plugin = "java-library")
 
+    // Add shared test resources (log4j2-test.xml) to the test classpath for all modules.
+    the<SourceSetContainer>()["test"].resources.srcDir(rootProject.file("gradle/test-resources"))
+
     tasks.withType<JavaCompile> {
         options.encoding = "UTF-8"
         options.release.set(17)
@@ -142,6 +145,14 @@ subprojects {
         "testImplementation"(rootProject.libs.awaitility)
         "testImplementation"(rootProject.libs.system.lambda)
         "testImplementation"(rootProject.libs.slf4j.api)
+
+        // Logging runtime for tests — provides Log4j2 as the SLF4J backend.
+        // Some connectors (Alluxio minicluster, Solr embedded) require a logging
+        // implementation to be present at test runtime.
+        "testRuntimeOnly"(rootProject.libs.log4j.api)
+        "testRuntimeOnly"(rootProject.libs.log4j.core)
+        "testRuntimeOnly"(rootProject.libs.log4j.slf4j2.impl)
+        "testRuntimeOnly"(rootProject.libs.jcl.over.slf4j)
     }
 
     tasks.withType<Test> {
