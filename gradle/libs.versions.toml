@@ -597,6 +597,7 @@ pulsar-functions-api = { module = "org.apache.pulsar:pulsar-functions-api", vers
 pulsar-functions-instance = { module = "org.apache.pulsar:pulsar-functions-instance", version.ref = "pulsar" }
 pulsar-functions-utils = { module = "org.apache.pulsar:pulsar-functions-utils", version.ref = "pulsar" }
 pulsar-broker = { module = "org.apache.pulsar:pulsar-broker", version.ref = "pulsar" }
+pulsar-broker-test = { module = "org.apache.pulsar:pulsar-broker", version.ref = "pulsar" }
 pulsar-testmocks = { module = "org.apache.pulsar:testmocks", version.ref = "pulsar" }
 
 [plugins]

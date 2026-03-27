@@ -41,4 +41,7 @@ dependencies {
 
     testImplementation(libs.pulsar.client)
     testImplementation(libs.debezium.connector.mysql)
+    testImplementation(libs.pulsar.broker)
+    testImplementation(libs.pulsar.broker.test) { artifact { classifier = "tests" } }
+    testImplementation(libs.pulsar.testmocks) { artifact { classifier = "tests" } }
 }
