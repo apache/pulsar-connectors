@@ -21,9 +21,9 @@ name: Pulsar Connectors CI
 
 on:
   pull_request:
-    branches: ['main', 'branch-*']
+    branches: ['main', 'master', 'branch-*']
   push:
-    branches: ['main', 'branch-*']
+    branches: ['main', 'master', 'branch-*']
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
