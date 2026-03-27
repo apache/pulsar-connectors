@@ -593,8 +593,10 @@ pulsar-common = { module = "org.apache.pulsar:pulsar-common", version.ref = "pul
 pulsar-client-api = { module = "org.apache.pulsar:pulsar-client-api", version.ref = "pulsar" }
 pulsar-client = { module = "org.apache.pulsar:pulsar-client-original", version.ref = "pulsar" }
 pulsar-config-validation = { module = "org.apache.pulsar:pulsar-config-validation", version.ref = "pulsar" }
+pulsar-functions-api = { module = "org.apache.pulsar:pulsar-functions-api", version.ref = "pulsar" }
 pulsar-functions-instance = { module = "org.apache.pulsar:pulsar-functions-instance", version.ref = "pulsar" }
 pulsar-functions-utils = { module = "org.apache.pulsar:pulsar-functions-utils", version.ref = "pulsar" }
+pulsar-broker = { module = "org.apache.pulsar:pulsar-broker", version.ref = "pulsar" }
 
 [plugins]
 lightproto = { id = "io.streamnative.lightproto", version.ref = "lightproto" }
