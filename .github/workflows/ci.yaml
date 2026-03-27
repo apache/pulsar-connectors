@@ -21,7 +21,7 @@ name: Pulsar Connectors CI
 
 on:
   pull_request:
-    branches: ['*']
+    branches: ['main', 'branch-*']
   push:
     branches: ['main', 'branch-*']
 
