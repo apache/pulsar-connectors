@@ -21,6 +21,55 @@ plugins {
     alias(libs.plugins.rat)
 }
 
+tasks.named("rat").configure {
+    val excludesProp = this.javaClass.getMethod("getExcludes").invoke(this)
+    @Suppress("UNCHECKED_CAST")
+    val excludes = excludesProp as MutableCollection<String>
+    excludes.addAll(listOf(
+        // Build artifacts
+        "**/build/**",
+        "**/target/**",
+        // Gradle files
+        ".gradle/**",
+        "gradle/wrapper/**",
+        "**/.gradle/**",
+        "**/gradle/wrapper/**",
+        // Generated Flatbuffer files (Kinesis)
+        "**/org/apache/pulsar/io/kinesis/fbs/*.java",
+        // Services files
+        "**/META-INF/services/*",
+        // Certificates and keys
+        "**/*.crt",
+        "**/*.key",
+        "**/*.csr",
+        "**/*.pem",
+        "**/*.json",
+        "**/*.txt",
+        // Project/IDE files
+        "**/*.md",
+        ".github/**",
+        "**/*.nar",
+        "**/.gitignore",
+        "**/.gitattributes",
+        "**/*.iml",
+        "**/.classpath",
+        "**/.project",
+        "**/.settings",
+        "**/.idea/**",
+        "**/.vscode/**",
+        // Avro schemas
+        "**/*.avsc",
+        // Patch files
+        "**/*.patch",
+        // Hidden directories
+        ".*/**",
+        // Test output
+        "**/test-output/**",
+        // Log files
+        "**/*.log",
+    ))
+}
+
 val catalog = the<VersionCatalogsExtension>().named("libs")
 val pulsarConnectorsVersion = catalog.findVersion("pulsar-connectors").get().requiredVersion
 
