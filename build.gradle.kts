@@ -43,6 +43,9 @@ tasks.named("rat").configure {
         "**/*.key",
         "**/*.csr",
         "**/*.pem",
+        "**/*.srl",
+        "**/certificate-authority/serial",
+        "**/certificate-authority/index.txt",
         "**/*.json",
         "**/*.txt",
         // Project/IDE files
