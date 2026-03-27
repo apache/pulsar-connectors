@@ -88,7 +88,7 @@ subprojects {
     }
 
     // Parent modules and non-Java modules that have no source code of their own
-    val skipModules = setOf("jdbc", "debezium", "distribution", "tests", "docker")
+    val skipModules = setOf("jdbc", "debezium", "distribution", "docker")
     if (project.name in skipModules && project.childProjects.isNotEmpty()) {
         return@subprojects
     }

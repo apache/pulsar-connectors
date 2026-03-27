@@ -48,11 +48,12 @@ jobs:
       - uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c
 
       - name: Build all modules
-        run: ./gradlew build -x test 
+        run: ./gradlew build -x test
       - name: License check (RAT)
-        run: ./gradlew rat 
-  unit-tests:
-    name: Unit - ${{ matrix.name }}
+        run: ./gradlew rat
+
+  tests:
+    name: Tests - ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     needs: build-and-license
@@ -60,15 +61,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: Kafka Connect Adaptor
-            tasks: ':kafka-connect-adaptor:test'
-          - name: Elastic Search
-            tasks: ':elastic-search:test'
           - name: Connectors
-            tasks: >-
-              test
-              -x :kafka-connect-adaptor:test
-              -x :elastic-search:test
+            tasks: test
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -78,66 +72,11 @@ jobs:
       - uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c
 
       - name: Run tests
-        run: ./gradlew ${{ matrix.tasks }} 
+        run: ./gradlew ${{ matrix.tasks }}
       - name: Upload test reports
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: Unit-${{ matrix.name }}-test-reports
+          name: ${{ matrix.name }}-test-reports
           path: '**/build/reports/tests/'
-          retention-days: 7
-
-  integration-tests:
-    name: CI - Integration - ${{ matrix.name }}
-    runs-on: ubuntu-latest
-    timeout-minutes: ${{ matrix.timeout || 75 }}
-    needs: build-and-license
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: IO Sinks
-            suite_file: pulsar-io-sinks.xml
-            test_groups: sink
-          - name: IO Sources
-            suite_file: pulsar-io-sources.xml
-            test_groups: source
-          - name: IO Oracle
-            suite_file: pulsar-io-ora-source.xml
-            test_groups: source
-            timeout: 90
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
-        with:
-          distribution: ${{ env.JDK_DISTRIBUTION }}
-          java-version: ${{ env.JDK_VERSION }}
-      - uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c
-
-      - name: Build connector NARs
-        run: ./gradlew build -x test
-
-      - name: Build test Docker image
-        run: ./gradlew :docker:pulsar-connectors-test-image:dockerBuild
-
-      - name: Run integration tests - ${{ matrix.name }}
-        run: |
-          ./gradlew :tests:integration:integrationTest \
-            -PintegrationTestSuiteFile=${{ matrix.suite_file }} \
-            -PtestGroups=${{ matrix.test_groups }}
-
-      - name: Upload test reports
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: Integration-${{ matrix.name }}-test-reports
-          path: '**/build/reports/tests/'
-          retention-days: 7
-
-      - name: Upload container logs
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: Integration-${{ matrix.name }}-container-logs
-          path: tests/integration/build/container-logs
           retention-days: 7

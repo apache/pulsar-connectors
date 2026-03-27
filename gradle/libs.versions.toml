@@ -484,6 +484,8 @@ testcontainers-kafka = { module = "org.testcontainers:kafka", version.ref = "tes
 testcontainers-mysql = { module = "org.testcontainers:mysql", version.ref = "testcontainers" }
 testcontainers-postgresql = { module = "org.testcontainers:postgresql", version.ref = "testcontainers" }
 testcontainers-mongodb = { module = "org.testcontainers:mongodb", version.ref = "testcontainers" }
+testcontainers-pulsar = { module = "org.testcontainers:pulsar", version.ref = "testcontainers" }
+testcontainers-cassandra = { module = "org.testcontainers:cassandra", version.ref = "testcontainers" }
 testcontainers-k3s = { module = "org.testcontainers:k3s", version.ref = "testcontainers" }
 kerby-simplekdc = { module = "org.apache.kerby:kerb-simplekdc", version.ref = "kerby" }
 json = { module = "org.json:json", version.ref = "json" }
@@ -593,6 +595,7 @@ pulsar-io-common = { module = "org.apache.pulsar:pulsar-io-common", version.ref 
 pulsar-common = { module = "org.apache.pulsar:pulsar-common", version.ref = "pulsar" }
 pulsar-client-api = { module = "org.apache.pulsar:pulsar-client-api", version.ref = "pulsar" }
 pulsar-client = { module = "org.apache.pulsar:pulsar-client-original", version.ref = "pulsar" }
+pulsar-client-admin = { module = "org.apache.pulsar:pulsar-client-admin-original", version.ref = "pulsar" }
 pulsar-config-validation = { module = "org.apache.pulsar:pulsar-config-validation", version.ref = "pulsar" }
 pulsar-functions-api = { module = "org.apache.pulsar:pulsar-functions-api", version.ref = "pulsar" }
 pulsar-functions-instance = { module = "org.apache.pulsar:pulsar-functions-instance", version.ref = "pulsar" }

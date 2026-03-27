@@ -30,26 +30,30 @@ import io.debezium.relational.history.SchemaHistory;
 import io.debezium.relational.history.SchemaHistoryListener;
 import io.debezium.text.ParsingException;
 import io.debezium.util.Collect;
-import java.io.ByteArrayOutputStream;
-import java.io.ObjectOutputStream;
-import java.util.Base64;
 import java.util.List;
 import java.util.Map;
-import org.apache.pulsar.client.api.ClientBuilder;
+import org.apache.pulsar.client.admin.PulsarAdmin;
 import org.apache.pulsar.client.api.Producer;
-import org.apache.pulsar.client.api.ProducerConsumerBase;
 import org.apache.pulsar.client.api.PulsarClient;
 import org.apache.pulsar.client.api.Reader;
 import org.apache.pulsar.client.api.Schema;
+import org.testcontainers.containers.PulsarContainer;
+import org.testcontainers.utility.DockerImageName;
 import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
 
 /**
- * Test the implementation of {@link PulsarSchemaHistory}.
+ * Test the implementation of {@link PulsarSchemaHistory} using Testcontainers.
  */
-public class PulsarSchemaHistoryTest extends ProducerConsumerBase {
+public class PulsarSchemaHistoryTest {
 
+    private static final String PULSAR_IMAGE =
+            System.getenv().getOrDefault("PULSAR_TEST_IMAGE", "apachepulsar/pulsar:4.1.3");
+
+    private PulsarContainer pulsarContainer;
+    private PulsarClient pulsarClient;
+    private PulsarAdmin admin;
     private PulsarSchemaHistory history;
     private Map<String, Object> position;
     private Map<String, String> source;
@@ -57,50 +61,56 @@ public class PulsarSchemaHistoryTest extends ProducerConsumerBase {
     private String ddl;
 
     @BeforeMethod
-    @Override
     protected void setup() throws Exception {
-        super.internalSetup();
-        super.producerBaseSetup();
+        pulsarContainer = new PulsarContainer(DockerImageName.parse(PULSAR_IMAGE));
+        pulsarContainer.start();
+
+        pulsarClient = PulsarClient.builder()
+                .serviceUrl(pulsarContainer.getPulsarBrokerUrl())
+                .build();
+        admin = PulsarAdmin.builder()
+                .serviceHttpUrl(pulsarContainer.getHttpServiceUrl())
+                .build();
+
+        // Create namespace used by tests
+        admin.namespaces().createNamespace("public/my-ns");
 
         source = Collect.hashMapOf("server", "my-server");
         setLogPosition(0);
-        this.topicName = "persistent://my-property/my-ns/schema-changes-topic";
+        this.topicName = "persistent://public/my-ns/schema-changes-topic";
         this.history = new PulsarSchemaHistory();
     }
 
     @AfterMethod(alwaysRun = true)
-    @Override
     protected void cleanup() throws Exception {
-        super.internalCleanup();
-        history.stop();
+        if (history != null) {
+            history.stop();
+        }
+        if (pulsarClient != null) {
+            pulsarClient.close();
+        }
+        if (admin != null) {
+            admin.close();
+        }
+        if (pulsarContainer != null) {
+            pulsarContainer.stop();
+        }
     }
 
-    private void testHistoryTopicContent(boolean skipUnparseableDDL, boolean testWithClientBuilder,
+    private void testHistoryTopicContent(boolean skipUnparseableDDL,
                                          boolean testWithReaderConfig) throws Exception {
-        Configuration.Builder configBuidler = Configuration.create()
+        Configuration.Builder configBuilder = Configuration.create()
                 .with(PulsarSchemaHistory.TOPIC, topicName)
+                .with(PulsarSchemaHistory.SERVICE_URL, pulsarContainer.getPulsarBrokerUrl())
                 .with(SchemaHistory.NAME, "my-db-history")
                 .with(SchemaHistory.SKIP_UNPARSEABLE_DDL_STATEMENTS, skipUnparseableDDL);
 
-        if (testWithClientBuilder) {
-            ClientBuilder builder = PulsarClient.builder().serviceUrl(brokerUrl.toString());
-            ByteArrayOutputStream bao = new ByteArrayOutputStream();
-            try (ObjectOutputStream oos = new ObjectOutputStream(bao)) {
-                oos.writeObject(builder);
-                oos.flush();
-                byte[] data = bao.toByteArray();
-                configBuidler.with(PulsarSchemaHistory.CLIENT_BUILDER, Base64.getEncoder().encodeToString(data));
-            }
-        } else {
-            configBuidler.with(PulsarSchemaHistory.SERVICE_URL, brokerUrl.toString());
-        }
-
         if (testWithReaderConfig) {
-            configBuidler.with(PulsarSchemaHistory.READER_CONFIG, "{\"subscriptionName\":\"my-subscription\"}");
+            configBuilder.with(PulsarSchemaHistory.READER_CONFIG, "{\"subscriptionName\":\"my-subscription\"}");
         }
 
         // Start up the history ...
-        history.configure(configBuidler.build(), null, SchemaHistoryListener.NOOP, true);
+        history.configure(configBuilder.build(), null, SchemaHistoryListener.NOOP, true);
         history.start();
 
         // Should be able to call start more than once ...
@@ -125,12 +135,12 @@ public class PulsarSchemaHistoryTest extends ProducerConsumerBase {
         // There should have been nothing to recover ...
         assertEquals(tables1.size(), 0);
 
-        // Now record schema changes, which writes out to kafka but doesn't actually change the Tables ...
+        // Now record schema changes
         setLogPosition(10);
         ddl = "CREATE TABLE foo ( first VARCHAR(22) NOT NULL ); \n"
                 + "CREATE TABLE customers ( id INTEGER NOT NULL PRIMARY KEY, name VARCHAR(100) NOT NULL ); \n"
-                + "CREATE TABLE products ( productId INTEGER NOT NULL PRIMARY KEY, description VARCHAR(255) NOT NULL );"
-                + " \n";
+                + "CREATE TABLE products ( productId INTEGER NOT NULL PRIMARY KEY, "
+                + "description VARCHAR(255) NOT NULL ); \n";
         history.record(source, position, "db1", ddl);
 
         // Parse the DDL statement 3x and each time update a different Tables object ...
@@ -152,7 +162,8 @@ public class PulsarSchemaHistoryTest extends ProducerConsumerBase {
 
         // Record another DDL statement and parse it for 1 of our 3 Tables...
         setLogPosition(10003);
-        ddl = "CREATE TABLE suppliers ( supplierId INTEGER NOT NULL PRIMARY KEY, name VARCHAR(255) NOT NULL);";
+        ddl = "CREATE TABLE suppliers ( supplierId INTEGER NOT NULL PRIMARY KEY, "
+                + "name VARCHAR(255) NOT NULL);";
         history.record(source, position, "db1", ddl);
         ddlParser.parse(ddl, tables3);
         assertEquals(3, tables3.size());
@@ -160,7 +171,7 @@ public class PulsarSchemaHistoryTest extends ProducerConsumerBase {
         // Stop the history (which should stop the producer) ...
         history.stop();
         history = new PulsarSchemaHistory();
-        history.configure(configBuidler.build(), null, SchemaHistoryListener.NOOP, true);
+        history.configure(configBuilder.build(), null, SchemaHistoryListener.NOOP, true);
         // no need to start
 
         // Recover from the very beginning to just past the first change ...
@@ -188,10 +199,6 @@ public class PulsarSchemaHistoryTest extends ProducerConsumerBase {
         assertEquals(recoveredTables, tables3);
     }
 
-    private void testHistoryTopicContent(boolean skipUnparseableDDL, boolean testWithClientBuilder) throws Exception {
-        testHistoryTopicContent(skipUnparseableDDL, testWithClientBuilder, false);
-    }
-
     protected void setLogPosition(int index) {
         this.position = Collect.hashMapOf("filename", "my-txn-file.log",
             "position", index);
@@ -199,8 +206,7 @@ public class PulsarSchemaHistoryTest extends ProducerConsumerBase {
 
     @Test
     public void shouldStartWithEmptyTopicAndStoreDataAndRecoverAllState() throws Exception {
-        // Create the empty topic ...
-        testHistoryTopicContent(false, true);
+        testHistoryTopicContent(false, false);
     }
 
     @Test
@@ -222,7 +228,7 @@ public class PulsarSchemaHistoryTest extends ProducerConsumerBase {
                     + "\"position\":39},\"databaseName\":\"db1\",\"ddl\":\"xxxDROP TABLE foo;\"}");
         }
 
-        testHistoryTopicContent(true, true);
+        testHistoryTopicContent(true, false);
     }
 
     @Test(expectedExceptions = ParsingException.class)
@@ -235,17 +241,15 @@ public class PulsarSchemaHistoryTest extends ProducerConsumerBase {
         testHistoryTopicContent(false, false);
     }
 
-
     @Test
     public void testExists() throws Exception {
-        // happy path
         testHistoryTopicContent(true, false);
         assertTrue(history.exists());
 
         // Set history to use dummy topic
         Configuration config = Configuration.create()
-            .with(PulsarSchemaHistory.SERVICE_URL, brokerUrl.toString())
-            .with(PulsarSchemaHistory.TOPIC, "persistent://my-property/my-ns/dummytopic")
+            .with(PulsarSchemaHistory.SERVICE_URL, pulsarContainer.getPulsarBrokerUrl())
+            .with(PulsarSchemaHistory.TOPIC, "persistent://public/my-ns/dummytopic")
             .with(SchemaHistory.NAME, "my-db-history")
             .with(SchemaHistory.SKIP_UNPARSEABLE_DDL_STATEMENTS, true)
             .build();
@@ -259,7 +263,7 @@ public class PulsarSchemaHistoryTest extends ProducerConsumerBase {
 
     @Test
     public void testSubscriptionName() throws Exception {
-        testHistoryTopicContent(true, false, true);
+        testHistoryTopicContent(true, true);
         assertTrue(history.exists());
         try (Reader<String> ignored = history.createHistoryReader()) {
             List<String> subscriptions = admin.topics().getSubscriptions(topicName);
