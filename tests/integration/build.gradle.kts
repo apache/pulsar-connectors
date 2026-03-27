@@ -27,14 +27,6 @@ val kafkaVersion = ver("kafka-client")
 val debeziumVersion = ver("debezium")
 
 dependencies {
-    // Pulsar integration test infrastructure (test-jar with PulsarCluster, PulsarContainer, etc.)
-    testImplementation(lib("pulsar-integration-tests")) {
-        artifact {
-            classifier = "tests"
-            type = "jar"
-        }
-    }
-
     // Pulsar client libraries needed by tests
     testImplementation(lib("pulsar-client"))
     testImplementation(lib("pulsar-client-api"))
@@ -76,7 +68,15 @@ dependencies {
     testImplementation(lib("failsafe"))
     testImplementation(lib("awaitility"))
     testImplementation(lib("commons-lang3"))
+    testImplementation(lib("commons-io"))
+    testImplementation(lib("commons-compress"))
     testImplementation(lib("guava"))
+
+    // Netty (needed by ExtendedNettyLeakDetector and container infrastructure)
+    testImplementation(lib("netty-buffer"))
+
+    // Logging (needed by ExtendedNettyLeakDetector)
+    testImplementation(lib("log4j-api"))
 }
 
 // Tests are skipped by default — only run when explicitly invoked via the integrationTest task
