@@ -25,4 +25,6 @@ dependencies {
     implementation(libs.jackson.databind)
     implementation(libs.jackson.dataformat.yaml)
     implementation(libs.cassandra.driver)
+
+    testImplementation(libs.testcontainers.cassandra)
 }

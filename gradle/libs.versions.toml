@@ -553,6 +553,7 @@ cassandra-driver = { module = "com.datastax.cassandra:cassandra-driver-core", ve
 failsafe = { module = "dev.failsafe:failsafe", version.ref = "failsafe" }
 docker-java-core = { module = "com.github.docker-java:docker-java-core", version = "3.4.1" }
 mongodb-driver-reactivestreams = { module = "org.mongodb:mongodb-driver-reactivestreams", version.ref = "mongodb-driver" }
+mongodb-driver-sync = { module = "org.mongodb:mongodb-driver-sync", version.ref = "mongodb-driver" }
 lettuce-core = { module = "io.lettuce:lettuce-core", version.ref = "lettuce" }
 solr-solrj = { module = "org.apache.solr:solr-solrj", version.ref = "solr" }
 solr-test-framework = { module = "org.apache.solr:solr-test-framework", version.ref = "solr" }
