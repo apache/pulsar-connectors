@@ -25,4 +25,9 @@ dependencies {
     implementation(project(":debezium:pulsar-io-debezium-core"))
     implementation(libs.debezium.connector.postgres)
     runtimeOnly(libs.postgresql.jdbc)
+
+    testImplementation(libs.testcontainers.postgresql)
+    testImplementation(libs.testcontainers.pulsar)
+    testImplementation(libs.pulsar.client)
+    testImplementation(libs.postgresql.jdbc)
 }
