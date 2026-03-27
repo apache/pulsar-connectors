@@ -106,6 +106,4 @@ val dockerBuild by tasks.registering(Exec::class) {
     )
 }
 
-tasks.named("assemble") {
-    dependsOn(dockerBuild)
-}
+// Docker image is not part of the default build — invoke dockerBuild explicitly
