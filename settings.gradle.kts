@@ -108,8 +108,16 @@ project(":debezium:pulsar-io-debezium-oracle").projectDir = file("debezium/oracl
 include("debezium:pulsar-io-debezium-postgres")
 project(":debezium:pulsar-io-debezium-postgres").projectDir = file("debezium/postgres")
 
+// Integration tests
+include("tests:integration")
+project(":tests:integration").projectDir = file("tests/integration")
+
 // Docs (connector doc generation)
 include("docs")
+
+// Docker
+include("docker:pulsar-all-docker-image")
+project(":docker:pulsar-all-docker-image").projectDir = file("docker/pulsar-all")
 
 // Distribution
 include("distribution:pulsar-io-distribution")

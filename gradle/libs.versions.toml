@@ -493,6 +493,7 @@ aws-java-sdk-core = { module = "com.amazonaws:aws-java-sdk-core", version.ref = 
 aws-java-sdk-sts = { module = "com.amazonaws:aws-java-sdk-sts", version.ref = "aws-sdk" }
 aws-sdk2-regions = { module = "software.amazon.awssdk:regions", version.ref = "aws-sdk2" }
 aws-sdk2-sts = { module = "software.amazon.awssdk:sts", version.ref = "aws-sdk2" }
+aws-sdk2-kinesis = { module = "software.amazon.awssdk:kinesis", version.ref = "aws-sdk2" }
 aws-sdk2-utils = { module = "software.amazon.awssdk:utils", version.ref = "aws-sdk2" }
 dynamodb-streams-kinesis-adapter = { module = "com.amazonaws:dynamodb-streams-kinesis-adapter", version = "1.6.0" }
 amazon-kinesis-client = { module = "software.amazon.kinesis:amazon-kinesis-client", version = "2.6.0" }
@@ -599,6 +600,7 @@ pulsar-functions-utils = { module = "org.apache.pulsar:pulsar-functions-utils", 
 pulsar-broker = { module = "org.apache.pulsar:pulsar-broker", version.ref = "pulsar" }
 pulsar-broker-test = { module = "org.apache.pulsar:pulsar-broker", version.ref = "pulsar" }
 pulsar-testmocks = { module = "org.apache.pulsar:testmocks", version.ref = "pulsar" }
+pulsar-integration-tests = { module = "org.apache.pulsar:pulsar-integration-tests", version.ref = "pulsar" }
 
 [plugins]
 lightproto = { id = "io.streamnative.lightproto", version.ref = "lightproto" }
