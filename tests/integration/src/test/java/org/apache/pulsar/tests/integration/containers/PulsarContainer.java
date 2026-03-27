@@ -59,7 +59,7 @@ public abstract class PulsarContainer<SelfT extends PulsarContainer<SelfT>> exte
 
     public static final String ALPINE_IMAGE_NAME = "alpine:3.23";
     public static final String DEFAULT_IMAGE_NAME = System.getenv().getOrDefault("PULSAR_TEST_IMAGE_NAME",
-            "apachepulsar/pulsar-test-latest-version:latest");
+            "apachepulsar/pulsar-connectors-test:latest");
     public static final String UPGRADE_TEST_IMAGE_NAME = System.getenv().getOrDefault("PULSAR_UPGRADE_TEST_IMAGE_NAME",
             DEFAULT_IMAGE_NAME);
     public static final String LAST_RELEASE_IMAGE_NAME = System.getenv().getOrDefault("PULSAR_LAST_RELEASE_IMAGE_NAME",

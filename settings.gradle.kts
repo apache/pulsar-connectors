@@ -118,6 +118,8 @@ include("docs")
 // Docker
 include("docker:pulsar-all-docker-image")
 project(":docker:pulsar-all-docker-image").projectDir = file("docker/pulsar-all")
+include("docker:pulsar-connectors-test-image")
+project(":docker:pulsar-connectors-test-image").projectDir = file("docker/pulsar-connectors-test")
 
 // Distribution
 include("distribution:pulsar-io-distribution")

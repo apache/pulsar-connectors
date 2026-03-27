@@ -117,6 +117,9 @@ jobs:
       - name: Build connector NARs
         run: ./gradlew build -x test
 
+      - name: Build test Docker image
+        run: ./gradlew :docker:pulsar-connectors-test-image:dockerBuild
+
       - name: Run integration tests - ${{ matrix.name }}
         run: |
           ./gradlew :tests:integration:integrationTest \
