@@ -27,7 +27,8 @@ plugins {
 val jetty10Version = "10.0.24"
 configurations.matching { it.name.startsWith("test") }.configureEach {
     resolutionStrategy.eachDependency {
-        if (requested.group.startsWith("org.eclipse.jetty")) {
+        if (requested.group.startsWith("org.eclipse.jetty")
+                && !requested.group.contains("toolchain")) {
             useVersion(jetty10Version)
         }
     }

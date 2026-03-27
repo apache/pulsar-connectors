@@ -28,57 +28,36 @@ val dockerOrganization = (findProperty("docker.organization") as String?) ?: "ap
 val dockerTag = (findProperty("docker.tag") as String?) ?: "latest"
 val pulsarImage = (findProperty("pulsar.image") as String?) ?: "${dockerOrganization}/pulsar:${pulsarVersion}"
 
-// Resolvable configuration for connector NAR artifacts
-val connectorNars by configurations.creating {
-    isCanBeResolved = true
-    isCanBeConsumed = false
-    isTransitive = false
-    attributes {
-        attribute(ArtifactTypeDefinition.ARTIFACT_TYPE_ATTRIBUTE, "nar")
-    }
-}
-
-dependencies {
-    connectorNars(project(":cassandra"))
-    connectorNars(project(":kafka"))
-    connectorNars(project(":http"))
-    connectorNars(project(":kinesis"))
-    connectorNars(project(":rabbitmq"))
-    connectorNars(project(":nsq"))
-    connectorNars(project(":jdbc:pulsar-io-jdbc-sqlite"))
-    connectorNars(project(":jdbc:pulsar-io-jdbc-mariadb"))
-    connectorNars(project(":jdbc:pulsar-io-jdbc-clickhouse"))
-    connectorNars(project(":jdbc:pulsar-io-jdbc-postgres"))
-    connectorNars(project(":jdbc:pulsar-io-jdbc-openmldb"))
-    connectorNars(project(":aerospike"))
-    connectorNars(project(":elastic-search"))
-    connectorNars(project(":kafka-connect-adaptor-nar"))
-    connectorNars(project(":hbase"))
-    connectorNars(project(":hdfs3"))
-    connectorNars(project(":file"))
-    connectorNars(project(":canal"))
-    connectorNars(project(":netty"))
-    connectorNars(project(":mongo"))
-    connectorNars(project(":debezium:pulsar-io-debezium-mysql"))
-    connectorNars(project(":debezium:pulsar-io-debezium-postgres"))
-    connectorNars(project(":debezium:pulsar-io-debezium-oracle"))
-    connectorNars(project(":debezium:pulsar-io-debezium-mssql"))
-    connectorNars(project(":debezium:pulsar-io-debezium-mongodb"))
-    connectorNars(project(":influxdb"))
-    connectorNars(project(":redis"))
-    connectorNars(project(":solr"))
-    connectorNars(project(":dynamodb"))
-    connectorNars(project(":alluxio"))
-    connectorNars(project(":azure-data-explorer"))
-    connectorNars(project(":aws"))
-}
+// Connector projects that produce NAR files
+val connectorProjects = listOf(
+    ":cassandra", ":kafka", ":http", ":kinesis", ":rabbitmq", ":nsq",
+    ":jdbc:pulsar-io-jdbc-sqlite", ":jdbc:pulsar-io-jdbc-mariadb",
+    ":jdbc:pulsar-io-jdbc-clickhouse", ":jdbc:pulsar-io-jdbc-postgres",
+    ":jdbc:pulsar-io-jdbc-openmldb",
+    ":aerospike", ":elastic-search", ":kafka-connect-adaptor-nar",
+    ":hbase", ":hdfs3", ":file", ":canal", ":netty", ":mongo",
+    ":debezium:pulsar-io-debezium-mysql", ":debezium:pulsar-io-debezium-postgres",
+    ":debezium:pulsar-io-debezium-oracle", ":debezium:pulsar-io-debezium-mssql",
+    ":debezium:pulsar-io-debezium-mongodb",
+    ":influxdb", ":redis", ":solr", ":dynamodb", ":alluxio",
+    ":azure-data-explorer", ":aws",
+)
 
 // Prepare the build context
 val prepareBuildContext by tasks.registering(Sync::class) {
-    // Connector NARs
-    from(connectorNars) {
-        into("connectors")
+    // Depend on jar tasks of all connector projects (which produce .nar files via NAR plugin)
+    connectorProjects.forEach { path ->
+        dependsOn("${path}:jar")
     }
+
+    // Collect NAR files from each connector project's build/libs directory
+    connectorProjects.forEach { path ->
+        from(project(path).layout.buildDirectory.dir("libs")) {
+            include("*.nar")
+            into("connectors")
+        }
+    }
+
     // TLS certificates for integration tests
     from("${rootDir}/tests/certificate-authority") {
         into("certificate-authority")
