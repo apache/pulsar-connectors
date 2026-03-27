@@ -44,4 +44,5 @@ dependencies {
     testImplementation(libs.pulsar.broker)
     testImplementation(libs.pulsar.broker.test) { artifact { classifier = "tests" } }
     testImplementation(libs.pulsar.testmocks)
+    testImplementation(libs.pulsar.buildtools)
 }

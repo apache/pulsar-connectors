@@ -600,6 +600,7 @@ pulsar-functions-utils = { module = "org.apache.pulsar:pulsar-functions-utils", 
 pulsar-broker = { module = "org.apache.pulsar:pulsar-broker", version.ref = "pulsar" }
 pulsar-broker-test = { module = "org.apache.pulsar:pulsar-broker", version.ref = "pulsar" }
 pulsar-testmocks = { module = "org.apache.pulsar:testmocks", version.ref = "pulsar" }
+pulsar-buildtools = { module = "org.apache.pulsar:buildtools", version.ref = "pulsar" }
 
 [plugins]
 lightproto = { id = "io.streamnative.lightproto", version.ref = "lightproto" }
