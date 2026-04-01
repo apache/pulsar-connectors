@@ -21,8 +21,12 @@ plugins {
     id("pulsar-connectors.java-conventions")
     id("pulsar-connectors.nar-conventions")
 }
+pulsarConnectorsDependencies {
+    exclude(group = "org.eclipse.jetty", module = "jetty-bom")
+}
+
 dependencies {
-    enforcedPlatform(platform(libs.jetty9.bom))
+    implementation(enforcedPlatform(libs.jetty9.bom))
     implementation(libs.pulsar.io.core)
     implementation("org.alluxio:alluxio-core-client-fs:2.9.3")
     implementation(libs.jackson.dataformat.yaml)

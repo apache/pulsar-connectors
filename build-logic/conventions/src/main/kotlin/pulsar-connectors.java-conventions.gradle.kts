@@ -60,10 +60,44 @@ if (project.name !in modulesUsingBcFips) {
     }
 }
 
+// Extension to control how the shared dependency platform is applied.
+data class DependencyExclusion(val group: String, val module: String)
+
+open class PulsarConnectorsDependenciesExtension {
+    /** When true (default), uses enforcedPlatform; when false, uses platform. */
+    var enforced: Boolean = true
+
+    internal val excludes: MutableList<DependencyExclusion> = mutableListOf()
+
+    fun exclude(group: String, module: String) {
+        excludes.add(DependencyExclusion(group, module))
+    }
+}
+
+val pulsarConnectorsDependencies = extensions.create<PulsarConnectorsDependenciesExtension>("pulsarConnectorsDependencies")
+
+// Use withDependencies to lazily add the platform dependency after subproject build scripts
+// have configured the extension. This avoids afterEvaluate which is incompatible with
+// configuration cache.
+val depsHandler = dependencies
+configurations["implementation"].withDependencies {
+    val platformNotation = project(":pulsar-connectors-dependencies")
+    val configureAction = Action<Dependency> {
+        (this as ModuleDependency).apply {
+            pulsarConnectorsDependencies.excludes.forEach { exc ->
+                exclude(group = exc.group, module = exc.module)
+            }
+        }
+    }
+    val dep = if (pulsarConnectorsDependencies.enforced) {
+        depsHandler.enforcedPlatform(platformNotation, configureAction)
+    } else {
+        depsHandler.platform(platformNotation, configureAction)
+    }
+    add(dep)
+}
+
 dependencies {
-    // Enforced platform pins all dependency versions from the version catalog.
-    // This is the Gradle equivalent of Maven's dependencyManagement section.
-    "implementation"(enforcedPlatform(project(":pulsar-connectors-dependencies")))
 
     // Resolve lz4-java capability conflict: at.yawk.lz4:lz4-java (used by Pulsar) and
     // org.lz4:lz4-java (used by kafka-clients) both provide the org.lz4:lz4-java capability.
