@@ -239,10 +239,13 @@ public class AlluxioSinkTest {
 
     private LocalAlluxioCluster setupSingleMasterCluster() throws Exception {
         // Setup and start the local alluxio cluster
+        log.info("Configuring local Alluxio cluster");
         LocalAlluxioCluster cluster = new LocalAlluxioCluster();
         cluster.initConfiguration(getTestName(getClass().getSimpleName(), "test"));
         Configuration.set(PropertyKey.USER_FILE_WRITE_TYPE_DEFAULT, WriteType.MUST_CACHE);
+        log.info("Starting local Alluxio cluster");
         cluster.start();
+        log.info("Alluxio cluster started");
         return cluster;
     }
 
