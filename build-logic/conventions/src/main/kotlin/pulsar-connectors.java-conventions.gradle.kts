@@ -79,9 +79,8 @@ val pulsarConnectorsDependencies = extensions.create<PulsarConnectorsDependencie
 // Use withDependencies to lazily add the platform dependency after subproject build scripts
 // have configured the extension. This avoids afterEvaluate which is incompatible with
 // configuration cache.
-val depsHandler = dependencies
 configurations["implementation"].withDependencies {
-    val platformNotation = project(":pulsar-connectors-dependencies")
+    val platformProject = project(":pulsar-connectors-dependencies")
     val configureAction = Action<Dependency> {
         (this as ModuleDependency).apply {
             pulsarConnectorsDependencies.excludes.forEach { exc ->
@@ -90,9 +89,9 @@ configurations["implementation"].withDependencies {
         }
     }
     val dep = if (pulsarConnectorsDependencies.enforced) {
-        depsHandler.enforcedPlatform(platformNotation, configureAction)
+        dependencies.enforcedPlatform(platformProject, configureAction)
     } else {
-        depsHandler.platform(platformNotation, configureAction)
+        dependencies.platform(platformProject, configureAction)
     }
     add(dep)
 }
