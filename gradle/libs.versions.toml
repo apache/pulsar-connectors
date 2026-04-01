@@ -567,4 +567,4 @@ spotless = { id = "com.diffplug.spotless", version.ref = "spotless" }
 idea-ext = { id = "org.jetbrains.gradle.plugin.idea-ext", version.ref = "idea-ext" }
 version-catalog-update = "nl.littlerobots.version-catalog-update:1.1.0"
 versions = "com.github.ben-manes.versions:0.53.0"
-license = "com.github.hierynomus.license:0.16.1"
+crlf = "com.github.vlsi.crlf:3.0.1"

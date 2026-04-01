@@ -17,6 +17,7 @@
  * under the License.
  */
 
+import com.github.vlsi.gradle.git.dsl.gitignore
 import org.jetbrains.gradle.ext.copyright
 import org.jetbrains.gradle.ext.settings
 
@@ -24,6 +25,7 @@ plugins {
     alias(libs.plugins.rat)
     alias(libs.plugins.version.catalog.update)
     alias(libs.plugins.versions)
+    alias(libs.plugins.crlf) apply false
     alias(libs.plugins.idea.ext)
     alias(libs.plugins.spotless) apply false // workaround for https://github.com/diffplug/spotless/issues/2877
 }
@@ -46,56 +48,20 @@ tasks.named<com.github.benmanes.gradle.versions.updates.DependencyUpdatesTask>("
 }
 
 // ── Apache RAT (Release Audit Tool) ─────────────────────────────────────────
-tasks.named("rat").configure {
-    val excludesProp = this.javaClass.getMethod("getExcludes").invoke(this)
-    @Suppress("UNCHECKED_CAST")
-    val excludes = excludesProp as MutableCollection<String>
-    excludes.addAll(listOf(
-        // Build artifacts
-        "**/build/**",
-        "**/target/**",
-        // Gradle files
-        ".gradle/**",
-        "gradle/wrapper/**",
-        "**/.gradle/**",
-        "**/gradle/wrapper/**",
-        // Generated Flatbuffer files (Kinesis)
-        "**/org/apache/pulsar/io/kinesis/fbs/*.java",
-        // Services files
-        "**/META-INF/services/*",
-        // Certificates and keys
-        "**/*.crt",
-        "**/*.key",
-        "**/*.csr",
-        "**/*.pem",
-        "**/*.srl",
-        "**/certificate-authority/serial",
-        "**/certificate-authority/index.txt",
-        "**/*.json",
-        "**/*.txt",
-        // Project/IDE files
-        "**/*.md",
-        ".github/**",
-        "**/*.nar",
-        "**/.gitignore",
-        "**/.gitattributes",
-        "**/*.iml",
-        "**/.classpath",
-        "**/.project",
-        "**/.settings",
-        "**/.idea/**",
-        "**/.vscode/**",
-        // Avro schemas
-        "**/*.avsc",
-        // Patch files
-        "**/*.patch",
-        // Hidden directories
-        ".*/**",
-        // Test output
-        "**/test-output/**",
-        // Log files
-        "**/*.log",
-    ))
+tasks.named<org.nosphere.apache.rat.RatTask>("rat").configure {
+    // Honour .gitignore exclusions so RAT skips untracked/generated files.
+    // Register .gitignore files as inputs so the task re-runs when they change.
+    inputs.files(fileTree(rootDir) {
+        include("**/.gitignore")
+        exclude("**/build/**")
+        exclude("**/.gradle/**")
+    })
+    // use crlf plugin's gitignore dsl
+    gitignore(rootDir)
+    // Apply additional RAT-specific exclusions from .ratignore.
+    val ratignoreFile = rootDir.resolve(".ratignore")
+    inputs.file(ratignoreFile)
+    exclude(ratignoreFile.readLines().map { it.trim() }.filter { it.isNotBlank() && !it.startsWith("#") })
 }
 
 val catalog = the<VersionCatalogsExtension>().named("libs")
