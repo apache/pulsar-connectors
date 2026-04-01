@@ -17,13 +17,16 @@
  * under the License.
  */
 
-plugins {
-    id("pulsar-connectors.java-conventions")
-    id("pulsar-connectors.nar-conventions")
+dependencyResolutionManagement {
+    repositories {
+        gradlePluginPortal()
+        mavenCentral()
+    }
+    versionCatalogs {
+        create("libs") {
+            from(files("../gradle/libs.versions.toml"))
+        }
+    }
 }
-nar {
-    narId.set("pulsar-io-kafka-connect-adaptor")
-}
-dependencies {
-    implementation(project(":kafka-connect-adaptor"))
-}
+rootProject.name = "build-logic"
+include("conventions")

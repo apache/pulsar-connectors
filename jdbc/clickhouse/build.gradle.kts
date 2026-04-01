@@ -18,7 +18,8 @@
  */
 
 plugins {
-    alias(libs.plugins.nar)
+    id("pulsar-connectors.java-conventions")
+    id("pulsar-connectors.nar-conventions")
 }
 dependencies {
     implementation(project(":jdbc:pulsar-io-jdbc-core"))

@@ -18,12 +18,17 @@
  */
 
 plugins {
-    id("pulsar-connectors.java-conventions")
-    id("pulsar-connectors.nar-conventions")
+    `kotlin-dsl`
 }
-nar {
-    narId.set("pulsar-io-kafka-connect-adaptor")
-}
+
 dependencies {
-    implementation(project(":kafka-connect-adaptor"))
+    implementation(libs.plugins.shadow.get().let {
+        "${it.pluginId}:${it.pluginId}.gradle.plugin:${it.version}"
+    })
+    implementation(libs.plugins.spotless.get().let {
+        "${it.pluginId}:${it.pluginId}.gradle.plugin:${it.version}"
+    })
+    implementation(libs.plugins.nar.get().let {
+        "${it.pluginId}:${it.pluginId}.gradle.plugin:${it.version}"
+    })
 }

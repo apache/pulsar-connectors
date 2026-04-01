@@ -22,6 +22,7 @@ pluginManagement {
         gradlePluginPortal()
         mavenCentral()
     }
+    includeBuild("build-logic")
 }
 
 dependencyResolutionManagement {
@@ -49,8 +50,16 @@ dependencyResolutionManagement {
 
 rootProject.name = "pulsar-connectors"
 
+// This build requires Java 17 or later. Version check can be skipped with -PskipJavaVersionCheck parameter.
+val javaVersion = providers.provider { JavaVersion.current() }
+require(providers.gradleProperty("skipJavaVersionCheck").isPresent
+        || javaVersion.get() >= JavaVersion.VERSION_17) {
+    "This build requires Java 17 or later, but is running on Java ${javaVersion.get()}. " +
+    "Pass -PskipJavaVersionCheck to skip this check."
+}
+
 // Enforced platform for dependency version management
-include("pulsar-dependencies")
+include("pulsar-connectors-dependencies")
 
 // Simple connectors (flat layout, top-level directories)
 include("aerospike")

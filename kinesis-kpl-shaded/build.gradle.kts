@@ -18,7 +18,8 @@
  */
 
 plugins {
-    alias(libs.plugins.shadow)
+    id("pulsar-connectors.java-conventions")
+    id("pulsar-connectors.shadow-conventions")
 }
 
 dependencies {
@@ -34,16 +35,7 @@ configurations.all {
     }
 }
 
-// Disable the default jar task so the shadow JAR is the only artifact.
-// This avoids Gradle's implicit dependency validation errors when consumers
-// use project() to depend on this module.
-tasks.jar {
-    enabled = false
-}
-
 tasks.shadowJar {
-    archiveClassifier.set("")
-    mergeServiceFiles()
     dependencies {
         include(dependency("software.amazon.kinesis:amazon-kinesis-producer"))
         include(dependency("com.google.protobuf:protobuf-java"))

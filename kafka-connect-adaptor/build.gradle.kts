@@ -17,6 +17,9 @@
  * under the License.
  */
 
+plugins {
+    id("pulsar-connectors.java-conventions")
+}
 
 dependencies {
     compileOnly(libs.pulsar.io.core)

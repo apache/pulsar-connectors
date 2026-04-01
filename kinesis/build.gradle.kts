@@ -18,13 +18,14 @@
  */
 
 plugins {
-    alias(libs.plugins.nar)
+    id("pulsar-connectors.java-conventions")
+    id("pulsar-connectors.nar-conventions")
 }
 
 dependencies {
     // The shaded KPL project bundles amazon-kinesis-producer with relocated protobuf.
-    // Use shadowElements to get the shadow JAR (which has relocated protobuf).
-    implementation(project(path = ":kinesis-kpl-shaded", configuration = "shadowElements"))
+    // The shadow convention exposes the shadow JAR as the primary artifact.
+    implementation(project(":kinesis-kpl-shaded"))
     // CompileOnly: needed for compilation against KPL classes but NOT bundled in NAR.
     // At runtime, KPL classes come from the shaded project's shadow JAR.
     compileOnly(libs.amazon.kinesis.producer)

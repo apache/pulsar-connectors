@@ -18,12 +18,24 @@
  */
 
 plugins {
-    id("pulsar-connectors.java-conventions")
-    id("pulsar-connectors.nar-conventions")
+    id("com.diffplug.spotless")
 }
-nar {
-    narId.set("pulsar-io-kafka-connect-adaptor")
-}
-dependencies {
-    implementation(project(":kafka-connect-adaptor"))
+
+// ── License header check (Spotless) ────────────────────────────────────────
+val asfLicenseHeader = rootProject.file("src/license-header.txt").readText()
+val asfLicenseHeaderJava = "/*\n" + asfLicenseHeader.lines()
+    .map { " * $it".trimEnd() }
+    .joinToString("\n") + "/\n"
+
+configure<com.diffplug.gradle.spotless.SpotlessExtension> {
+    java {
+        targetExclude(
+            "**/generated/**",
+            "**/generated-sources/**",
+            // Generated FlatBuffers files (Kinesis)
+            "**/org/apache/pulsar/io/kinesis/fbs/*.java",
+            "build/**",
+        )
+        licenseHeader(asfLicenseHeaderJava, "(\\n|package|import|public|class|module) ?")
+    }
 }

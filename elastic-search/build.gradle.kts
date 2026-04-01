@@ -18,7 +18,8 @@
  */
 
 plugins {
-    alias(libs.plugins.nar)
+    id("pulsar-connectors.java-conventions")
+    id("pulsar-connectors.nar-conventions")
 }
 dependencies {
     compileOnly(libs.pulsar.io.core)
