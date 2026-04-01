@@ -24,13 +24,11 @@ plugins {
 
 val alluxioVersion = "2.9.4"
 
-// Alluxio requires older versions of netty, grpc, and jetty than the shared platform provides.
-// Exclude those BOMs so we can pin alluxio-compatible versions below.
+// Alluxio requires older versions of netty, grpc, jetty, and metrics than the shared platform
+// provides. Use non-enforced (non-strict) shared platform so the alluxio-specific enforced BOMs
+// below can override individual version constraints.
 pulsarConnectorsDependencies {
-    exclude(group = "io.netty", module = "netty-bom")
-    exclude(group = "io.grpc", module = "grpc-bom")
-    exclude(group = "org.eclipse.jetty", module = "jetty-bom")
-    exclude(group = "io.dropwizard.metrics", module = "metrics-jvm")
+    enforced = false
 }
 
 dependencies {
@@ -38,9 +36,6 @@ dependencies {
     implementation(enforcedPlatform(libs.jetty9.bom))
     implementation(enforcedPlatform("io.netty:netty-bom:4.1.100.Final"))
     implementation(enforcedPlatform("io.grpc:grpc-bom:1.37.0"))
-
-    // Pin metrics-jvm to the version alluxio expects.
-    implementation("io.dropwizard.metrics:metrics-jvm:4.1.11")
 
     implementation(libs.pulsar.io.core)
     implementation("org.alluxio:alluxio-core-client-fs:$alluxioVersion")
