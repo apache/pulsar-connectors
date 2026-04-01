@@ -60,11 +60,28 @@ if (project.name !in modulesUsingBcFips) {
     }
 }
 
-// Extension to control how the shared dependency platform is applied.
-data class DependencyExclusion(val group: String, val module: String)
-
+/**
+ * Configures how the shared `pulsar-connectors-dependencies` platform is applied.
+ *
+ * By default, the platform is applied as `enforcedPlatform`, which pins (strictly enforces) all
+ * dependency versions from the version catalog. Subprojects can customize this behavior:
+ *
+ * ```kotlin
+ * pulsarConnectorsDependencies {
+ *     // Exclude specific dependencies from the platform so they can be overridden locally.
+ *     // Useful when a module needs an older version of a BOM or library (e.g. alluxio needs
+ *     // older netty/grpc).
+ *     exclude(group = "io.netty", module = "netty-bom")
+ *
+ *     // Set enforced = false to use platform() instead of enforcedPlatform(). This makes all
+ *     // version constraints non-strict: the platform versions are used only as defaults (allowing
+ *     // version omission when declaring dependencies), but can be overridden by the module's own
+ *     // enforcedPlatform or strictly-versioned dependencies.
+ *     enforced = false
+ * }
+ * ```
+ */
 open class PulsarConnectorsDependenciesExtension {
-    /** When true (default), uses enforcedPlatform; when false, uses platform. */
     var enforced: Boolean = true
 
     internal val excludes: MutableList<DependencyExclusion> = mutableListOf()
@@ -74,11 +91,12 @@ open class PulsarConnectorsDependenciesExtension {
     }
 }
 
+data class DependencyExclusion(val group: String, val module: String)
+
 val pulsarConnectorsDependencies = extensions.create<PulsarConnectorsDependenciesExtension>("pulsarConnectorsDependencies")
 
-// Use withDependencies to lazily add the platform dependency after subproject build scripts
-// have configured the extension. This avoids afterEvaluate which is incompatible with
-// configuration cache.
+// withDependencies runs lazily after subproject build scripts have configured the extension.
+// This is configuration-cache compatible (unlike afterEvaluate).
 configurations["implementation"].withDependencies {
     val platformProject = project(":pulsar-connectors-dependencies")
     val configureAction = Action<Dependency> {
