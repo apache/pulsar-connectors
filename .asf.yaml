@@ -20,7 +20,6 @@
 github:
   description: "Apache Pulsar Connectors - source and sink connectors for Apache Pulsar"
   homepage: https://pulsar.apache.org/
-  default_branch: main
   labels:
     - pulsar
     - connectors
@@ -51,4 +50,3 @@ notifications:
   commits: commits@pulsar.apache.org
   issues: commits@pulsar.apache.org
   pullrequests: commits@pulsar.apache.org
-  jira_options: link label
