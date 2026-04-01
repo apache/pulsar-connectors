@@ -107,7 +107,7 @@ tasks.withType<Test>().configureEach {
         excludeGroups(*(excludedTestGroups.split(",").map { it.trim() }.toTypedArray()))
     }
     testLogging {
-        events("FAILED")
+        events("passed", "skipped", "failed")
         exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
         showStackTraces = true
         showExceptions = true
