@@ -250,8 +250,10 @@ public class AlluxioSinkTest {
         Configuration.set(PropertyKey.MASTER_AUDIT_LOGGING_ENABLED, false);
         Configuration.set(PropertyKey.MASTER_DAILY_BACKUP_ENABLED, false);
         Configuration.set(PropertyKey.MASTER_STARTUP_BLOCK_INTEGRITY_CHECK_ENABLED, false);
-        // Wait for workers to register before master proceeds (avoids "Failed to get worker info" spam)
-        Configuration.set(PropertyKey.MASTER_WORKER_CONNECT_WAIT_TIME, "5sec");
+        // Minimal safe mode wait — in a local minicluster the worker registers almost instantly.
+        // A longer wait (e.g. 5s) causes "master is in safe mode" failures when tests write right
+        // after startup.
+        Configuration.set(PropertyKey.MASTER_WORKER_CONNECT_WAIT_TIME, "500ms");
         log.info("Starting local Alluxio cluster");
         cluster.start();
         log.info("Alluxio cluster started");
