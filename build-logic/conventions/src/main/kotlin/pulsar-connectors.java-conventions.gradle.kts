@@ -112,6 +112,8 @@ tasks.withType<Test>().configureEach {
         showStackTraces = true
         showExceptions = true
         showCauses = true
+        showStandardStreams = providers.gradleProperty("testShowOutput")
+            .map { it.isBlank() || it.toBoolean() }.getOrElse(false)
     }
     maxHeapSize = "1300m"
     maxParallelForks = 4
