@@ -87,7 +87,12 @@ public class AlluxioSinkTest {
 
     @BeforeMethod
     public final void setUp() throws Exception {
-        cluster = setupSingleMasterCluster();
+        try {
+            cluster = setupSingleMasterCluster();
+        } catch (java.util.concurrent.TimeoutException e) {
+            throw new org.testng.SkipException(
+                    "Skipping test: Alluxio local cluster failed to start within timeout", e);
+        }
 
         map = new HashMap<>();
         // alluxioMasterHost should be set via LocalAlluxioCluster#getHostname

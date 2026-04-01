@@ -40,5 +40,7 @@ dependencies {
     }
 
     testImplementation(libs.pulsar.client)
+    testImplementation(libs.pulsar.client.admin)
     testImplementation(libs.debezium.connector.mysql)
+    testImplementation(libs.testcontainers.pulsar)
 }

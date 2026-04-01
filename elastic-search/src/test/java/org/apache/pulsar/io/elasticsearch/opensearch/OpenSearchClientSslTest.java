@@ -50,6 +50,11 @@ public class OpenSearchClientSslTest extends ElasticSearchTestBase {
     private static Map<String, String> sslEnv() {
         Map<String, String> map = new HashMap<>();
         map.put("plugins.security.disabled", "false");
+        // Disable memory lock — the security plugin with SSL needs more resources
+        // and memory locking can fail in CI environments without the proper ulimits.
+        map.put("bootstrap.memory_lock", "false");
+        // Increase JVM heap for the security plugin with SSL enabled.
+        map.put("OPENSEARCH_JAVA_OPTS", "-Xms256m -Xmx512m");
         map.put("plugins.security.ssl.http.enabled", "true");
 
         map.put("plugins.security.ssl.http.enabled", "true");
@@ -69,7 +74,7 @@ public class OpenSearchClientSslTest extends ElasticSearchTestBase {
                 .withFileSystemBind(SSL_RESOURCE_DIR, CONFIG_DIR + "/ssl")
                 .withEnv(sslEnv())
                 .waitingFor(Wait.forLogMessage(".*Node started.*", 1)
-                        .withStartupTimeout(Duration.ofMinutes(2)))) {
+                        .withStartupTimeout(Duration.ofMinutes(3)))) {
             container.start();
 
             ElasticSearchConfig config = new ElasticSearchConfig()
@@ -93,7 +98,7 @@ public class OpenSearchClientSslTest extends ElasticSearchTestBase {
                 .withEnv(sslEnv())
                 .withEnv("plugins.security.ssl.transport.enforce_hostname_verification", "true")
                 .waitingFor(Wait.forLogMessage(".*Node started.*", 1)
-                        .withStartupTimeout(Duration.ofMinutes(2)))) {
+                        .withStartupTimeout(Duration.ofMinutes(3)))) {
             container.start();
 
             ElasticSearchConfig config = new ElasticSearchConfig()

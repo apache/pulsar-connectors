@@ -111,6 +111,10 @@ project(":debezium:pulsar-io-debezium-postgres").projectDir = file("debezium/pos
 // Docs (connector doc generation)
 include("docs")
 
+// Docker
+include("docker:pulsar-all-docker-image")
+project(":docker:pulsar-all-docker-image").projectDir = file("docker/pulsar-all")
+
 // Distribution
 include("distribution:pulsar-io-distribution")
 project(":distribution:pulsar-io-distribution").projectDir = file("distribution/io")

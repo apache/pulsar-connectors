@@ -484,6 +484,8 @@ testcontainers-kafka = { module = "org.testcontainers:kafka", version.ref = "tes
 testcontainers-mysql = { module = "org.testcontainers:mysql", version.ref = "testcontainers" }
 testcontainers-postgresql = { module = "org.testcontainers:postgresql", version.ref = "testcontainers" }
 testcontainers-mongodb = { module = "org.testcontainers:mongodb", version.ref = "testcontainers" }
+testcontainers-pulsar = { module = "org.testcontainers:pulsar", version.ref = "testcontainers" }
+testcontainers-cassandra = { module = "org.testcontainers:cassandra", version.ref = "testcontainers" }
 testcontainers-k3s = { module = "org.testcontainers:k3s", version.ref = "testcontainers" }
 kerby-simplekdc = { module = "org.apache.kerby:kerb-simplekdc", version.ref = "kerby" }
 json = { module = "org.json:json", version.ref = "json" }
@@ -493,6 +495,7 @@ aws-java-sdk-core = { module = "com.amazonaws:aws-java-sdk-core", version.ref = 
 aws-java-sdk-sts = { module = "com.amazonaws:aws-java-sdk-sts", version.ref = "aws-sdk" }
 aws-sdk2-regions = { module = "software.amazon.awssdk:regions", version.ref = "aws-sdk2" }
 aws-sdk2-sts = { module = "software.amazon.awssdk:sts", version.ref = "aws-sdk2" }
+aws-sdk2-kinesis = { module = "software.amazon.awssdk:kinesis", version.ref = "aws-sdk2" }
 aws-sdk2-utils = { module = "software.amazon.awssdk:utils", version.ref = "aws-sdk2" }
 dynamodb-streams-kinesis-adapter = { module = "com.amazonaws:dynamodb-streams-kinesis-adapter", version = "1.6.0" }
 amazon-kinesis-client = { module = "software.amazon.kinesis:amazon-kinesis-client", version = "2.6.0" }
@@ -550,6 +553,7 @@ cassandra-driver = { module = "com.datastax.cassandra:cassandra-driver-core", ve
 failsafe = { module = "dev.failsafe:failsafe", version.ref = "failsafe" }
 docker-java-core = { module = "com.github.docker-java:docker-java-core", version = "3.4.1" }
 mongodb-driver-reactivestreams = { module = "org.mongodb:mongodb-driver-reactivestreams", version.ref = "mongodb-driver" }
+mongodb-driver-sync = { module = "org.mongodb:mongodb-driver-sync", version.ref = "mongodb-driver" }
 lettuce-core = { module = "io.lettuce:lettuce-core", version.ref = "lettuce" }
 solr-solrj = { module = "org.apache.solr:solr-solrj", version.ref = "solr" }
 solr-test-framework = { module = "org.apache.solr:solr-test-framework", version.ref = "solr" }
@@ -592,9 +596,15 @@ pulsar-io-common = { module = "org.apache.pulsar:pulsar-io-common", version.ref 
 pulsar-common = { module = "org.apache.pulsar:pulsar-common", version.ref = "pulsar" }
 pulsar-client-api = { module = "org.apache.pulsar:pulsar-client-api", version.ref = "pulsar" }
 pulsar-client = { module = "org.apache.pulsar:pulsar-client-original", version.ref = "pulsar" }
+pulsar-client-admin = { module = "org.apache.pulsar:pulsar-client-admin-original", version.ref = "pulsar" }
 pulsar-config-validation = { module = "org.apache.pulsar:pulsar-config-validation", version.ref = "pulsar" }
+pulsar-functions-api = { module = "org.apache.pulsar:pulsar-functions-api", version.ref = "pulsar" }
 pulsar-functions-instance = { module = "org.apache.pulsar:pulsar-functions-instance", version.ref = "pulsar" }
 pulsar-functions-utils = { module = "org.apache.pulsar:pulsar-functions-utils", version.ref = "pulsar" }
+pulsar-broker = { module = "org.apache.pulsar:pulsar-broker", version.ref = "pulsar" }
+pulsar-broker-test = { module = "org.apache.pulsar:pulsar-broker", version.ref = "pulsar" }
+pulsar-testmocks = { module = "org.apache.pulsar:testmocks", version.ref = "pulsar" }
+pulsar-buildtools = { module = "org.apache.pulsar:buildtools", version.ref = "pulsar" }
 
 [plugins]
 lightproto = { id = "io.streamnative.lightproto", version.ref = "lightproto" }

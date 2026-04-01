@@ -28,4 +28,7 @@ dependencies {
     implementation(libs.jackson.databind)
     implementation(libs.jackson.dataformat.yaml)
     implementation(libs.guava)
+
+    testImplementation(libs.testcontainers.mongodb)
+    testImplementation(libs.mongodb.driver.sync)
 }

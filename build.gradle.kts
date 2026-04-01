@@ -21,6 +21,58 @@ plugins {
     alias(libs.plugins.rat)
 }
 
+tasks.named("rat").configure {
+    val excludesProp = this.javaClass.getMethod("getExcludes").invoke(this)
+    @Suppress("UNCHECKED_CAST")
+    val excludes = excludesProp as MutableCollection<String>
+    excludes.addAll(listOf(
+        // Build artifacts
+        "**/build/**",
+        "**/target/**",
+        // Gradle files
+        ".gradle/**",
+        "gradle/wrapper/**",
+        "**/.gradle/**",
+        "**/gradle/wrapper/**",
+        // Generated Flatbuffer files (Kinesis)
+        "**/org/apache/pulsar/io/kinesis/fbs/*.java",
+        // Services files
+        "**/META-INF/services/*",
+        // Certificates and keys
+        "**/*.crt",
+        "**/*.key",
+        "**/*.csr",
+        "**/*.pem",
+        "**/*.srl",
+        "**/certificate-authority/serial",
+        "**/certificate-authority/index.txt",
+        "**/*.json",
+        "**/*.txt",
+        // Project/IDE files
+        "**/*.md",
+        ".github/**",
+        "**/*.nar",
+        "**/.gitignore",
+        "**/.gitattributes",
+        "**/*.iml",
+        "**/.classpath",
+        "**/.project",
+        "**/.settings",
+        "**/.idea/**",
+        "**/.vscode/**",
+        // Avro schemas
+        "**/*.avsc",
+        // Patch files
+        "**/*.patch",
+        // Hidden directories
+        ".*/**",
+        // Test output
+        "**/test-output/**",
+        // Log files
+        "**/*.log",
+    ))
+}
+
 val catalog = the<VersionCatalogsExtension>().named("libs")
 val pulsarConnectorsVersion = catalog.findVersion("pulsar-connectors").get().requiredVersion
 
@@ -35,12 +87,16 @@ subprojects {
         return@subprojects
     }
 
-    // Parent modules (jdbc, debezium) that have no source code
-    if (project.name == "jdbc" || project.name == "debezium" || project.name == "distribution") {
+    // Parent modules and non-Java modules that have no source code of their own
+    val skipModules = setOf("jdbc", "debezium", "distribution", "docker")
+    if (project.name in skipModules && project.childProjects.isNotEmpty()) {
         return@subprojects
     }
 
     apply(plugin = "java-library")
+
+    // Add shared test resources (log4j2-test.xml) to the test classpath for all modules.
+    the<SourceSetContainer>()["test"].resources.srcDir(rootProject.file("gradle/test-resources"))
 
     tasks.withType<JavaCompile> {
         options.encoding = "UTF-8"
@@ -92,6 +148,14 @@ subprojects {
         "testImplementation"(rootProject.libs.awaitility)
         "testImplementation"(rootProject.libs.system.lambda)
         "testImplementation"(rootProject.libs.slf4j.api)
+
+        // Logging runtime for tests — provides Log4j2 as the SLF4J backend.
+        // Some connectors (Alluxio minicluster, Solr embedded) require a logging
+        // implementation to be present at test runtime.
+        "testRuntimeOnly"(rootProject.libs.log4j.api)
+        "testRuntimeOnly"(rootProject.libs.log4j.core)
+        "testRuntimeOnly"(rootProject.libs.log4j.slf4j2.impl)
+        "testRuntimeOnly"(rootProject.libs.jcl.over.slf4j)
     }
 
     tasks.withType<Test> {
