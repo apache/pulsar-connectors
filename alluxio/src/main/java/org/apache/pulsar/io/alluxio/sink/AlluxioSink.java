@@ -224,10 +224,11 @@ public class AlluxioSink implements Sink<GenericObject> {
     }
 
     private void closeAndCommitTmpFile() throws AlluxioException, IOException {
-        // close the tmpFile
-        if (fileOutStream != null) {
-            fileOutStream.close();
+        if (fileOutStream == null) {
+            return;
         }
+        // close the tmpFile
+        fileOutStream.close();
         // commit the tmpFile
         String filePrefix = alluxioSinkConfig.getFilePrefix();
         String fileExtension = alluxioSinkConfig.getFileExtension();
