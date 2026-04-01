@@ -34,6 +34,7 @@ zookeeper = "3.9.5"
 netty = "4.1.132.Final"
 netty-iouring = "0.0.26.Final"
 jetty = "12.1.5"
+jetty9 = "9.4.58.v20250814"
 jersey = "2.42"
 jackson = "2.18.6"
 protobuf = "3.25.5"
@@ -280,6 +281,7 @@ curator-recipes = { module = "org.apache.curator:curator-recipes", version.ref =
 conscrypt-openjdk-uber = { module = "org.conscrypt:conscrypt-openjdk-uber", version.ref = "conscrypt" }
 # Jetty
 jetty-bom = { module = "org.eclipse.jetty:jetty-bom", version.ref = "jetty" }
+jetty9-bom = { module = "org.eclipse.jetty:jetty-bom", version.ref = "jetty9" }
 jetty-server = { module = "org.eclipse.jetty:jetty-server", version.ref = "jetty" }
 jetty-util = { module = "org.eclipse.jetty:jetty-util", version.ref = "jetty" }
 jetty-alpn-conscrypt-server = { module = "org.eclipse.jetty:jetty-alpn-conscrypt-server", version.ref = "jetty" }

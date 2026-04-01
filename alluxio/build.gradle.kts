@@ -22,6 +22,7 @@ plugins {
     id("pulsar-connectors.nar-conventions")
 }
 dependencies {
+    enforcedPlatform(platform(libs.jetty9.bom))
     implementation(libs.pulsar.io.core)
     implementation("org.alluxio:alluxio-core-client-fs:2.9.3")
     implementation(libs.jackson.dataformat.yaml)
