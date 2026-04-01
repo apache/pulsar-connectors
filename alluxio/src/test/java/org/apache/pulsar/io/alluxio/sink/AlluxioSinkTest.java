@@ -27,6 +27,8 @@ import alluxio.client.file.URIStatus;
 import alluxio.conf.Configuration;
 import alluxio.conf.PropertyKey;
 import alluxio.master.LocalAlluxioCluster;
+import alluxio.security.authentication.AuthType;
+import java.lang.reflect.Method;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -47,6 +49,7 @@ import org.mockito.Mock;
 import org.mockito.invocation.InvocationOnMock;
 import org.mockito.stubbing.Answer;
 import org.testng.Assert;
+import org.testng.annotations.AfterClass;
 import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeClass;
 import org.testng.annotations.BeforeMethod;
@@ -64,6 +67,7 @@ public class AlluxioSinkTest {
     protected Map<String, Object> map;
     protected AlluxioSink sink;
     protected LocalAlluxioCluster cluster;
+    protected String alluxioDir;
 
     @Mock
     protected Record<GenericObject> mockRecord;
@@ -74,7 +78,7 @@ public class AlluxioSinkTest {
     static GenericRecord fooBar;
 
     @BeforeClass
-    public static void init() {
+    public void init() throws Exception {
         valueSchema = Schema.JSON(Foobar.class);
         genericSchema = Schema.generic(valueSchema.getSchemaInfo());
         fooBar = genericSchema.newRecordBuilder()
@@ -83,25 +87,30 @@ public class AlluxioSinkTest {
                 .set("age", 20)
                 .build();
         kvSchema = Schema.KeyValue(Schema.STRING, genericSchema, KeyValueEncodingType.SEPARATED);
-    }
 
-    @BeforeMethod
-    public final void setUp() throws Exception {
         try {
             cluster = setupSingleMasterCluster();
         } catch (java.util.concurrent.TimeoutException e) {
             throw new org.testng.SkipException(
                     "Skipping test: Alluxio local cluster failed to start within timeout", e);
         }
+    }
+
+    @AfterClass
+    public void destroyCluster() throws Exception {
+        if (cluster != null) {
+            cluster.stop();
+        }
+    }
+
+    @BeforeMethod
+    public final void setUp(Method method) throws Exception {
+        alluxioDir = "/" + method.getName();
 
         map = new HashMap<>();
-        // alluxioMasterHost should be set via LocalAlluxioCluster#getHostname
-        // instead of using a fixed value "localhost", since it seems that
-        // LocalAlluxioCluster may bind other address than localhost
-        // when the node has multiple network interfaces.
         map.put("alluxioMasterHost", cluster.getHostname());
         map.put("alluxioMasterPort", cluster.getMasterRpcPort());
-        map.put("alluxioDir", "/pulsar");
+        map.put("alluxioDir", alluxioDir);
         map.put("filePrefix", "prefix");
         map.put("schemaEnable", "true");
 
@@ -131,8 +140,9 @@ public class AlluxioSinkTest {
 
     @AfterMethod
     public void tearDown() throws Exception {
-        if (cluster != null) {
-            cluster.stop();
+        if (sink != null) {
+            sink.close();
+            sink = null;
         }
     }
 
@@ -142,8 +152,6 @@ public class AlluxioSinkTest {
         map.put("fileExtension", ".txt");
         map.put("lineSeparator", "\n");
         map.put("rotationRecords", "100");
-
-        String alluxioDir = "/pulsar";
 
         sink = new AlluxioSink();
         sink.open(map, mockSinkContext);
@@ -156,8 +164,6 @@ public class AlluxioSinkTest {
         String alluxioTmpDir = FilenameUtils.concat(alluxioDir, "tmp");
         AlluxioURI alluxioTmpURI = new AlluxioURI(alluxioTmpDir);
         Assert.assertTrue(client.exists(alluxioTmpURI));
-
-        sink.close();
     }
 
     @Test
@@ -167,9 +173,6 @@ public class AlluxioSinkTest {
         map.put("lineSeparator", "\n");
         map.put("rotationRecords", "1");
         map.put("writeType", "THROUGH");
-        map.put("alluxioDir", "/pulsar");
-
-        String alluxioDir = "/pulsar";
 
         sink = new AlluxioSink();
         sink.open(map, mockSinkContext);
@@ -201,11 +204,9 @@ public class AlluxioSinkTest {
 
         for (String path : pathList) {
             if (path.contains("tmp")) {
-                // Ensure that the temporary file is rotated and the directory is empty
-                Assert.assertEquals(path, "/pulsar/tmp");
+                Assert.assertEquals(path, alluxioDir + "/tmp");
             } else {
-                // Ensure that all rotated files conform the naming convention
-                Assert.assertTrue(path.startsWith("/pulsar/TopicA-"));
+                Assert.assertTrue(path.startsWith(alluxioDir + "/TopicA-"));
             }
         }
 
@@ -228,13 +229,11 @@ public class AlluxioSinkTest {
 
         for (String path : pathList) {
             if (path.contains("tmp")) {
-                Assert.assertEquals(path, "/pulsar/tmp");
+                Assert.assertEquals(path, alluxioDir + "/tmp");
             } else {
-                Assert.assertTrue(path.startsWith("/pulsar/TopicA-"));
+                Assert.assertTrue(path.startsWith(alluxioDir + "/TopicA-"));
             }
         }
-
-        sink.close();
     }
 
     private LocalAlluxioCluster setupSingleMasterCluster() throws Exception {
@@ -243,6 +242,16 @@ public class AlluxioSinkTest {
         LocalAlluxioCluster cluster = new LocalAlluxioCluster();
         cluster.initConfiguration(getTestName(getClass().getSimpleName(), "test"));
         Configuration.set(PropertyKey.USER_FILE_WRITE_TYPE_DEFAULT, WriteType.MUST_CACHE);
+        // Disable auth handshake overhead
+        Configuration.set(PropertyKey.SECURITY_AUTHENTICATION_TYPE, AuthType.NOSASL);
+        Configuration.set(PropertyKey.SECURITY_AUTHORIZATION_PERMISSION_ENABLED, false);
+        // Disable unnecessary services
+        Configuration.set(PropertyKey.USER_METRICS_COLLECTION_ENABLED, false);
+        Configuration.set(PropertyKey.MASTER_AUDIT_LOGGING_ENABLED, false);
+        Configuration.set(PropertyKey.MASTER_DAILY_BACKUP_ENABLED, false);
+        Configuration.set(PropertyKey.MASTER_STARTUP_BLOCK_INTEGRITY_CHECK_ENABLED, false);
+        // Wait for workers to register before master proceeds (avoids "Failed to get worker info" spam)
+        Configuration.set(PropertyKey.MASTER_WORKER_CONNECT_WAIT_TIME, "5sec");
         log.info("Starting local Alluxio cluster");
         cluster.start();
         log.info("Alluxio cluster started");
