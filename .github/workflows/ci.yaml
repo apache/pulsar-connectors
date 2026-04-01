@@ -89,7 +89,7 @@ jobs:
           develocity-access-key: ${{ secrets.DEVELOCITY_ACCESS_KEY }}
 
       - name: Run tests
-        run: ./gradlew ${{ matrix.tasks }}
+        run: ./gradlew ${{ matrix.tasks }} -PtestFailFast=true
       - name: Upload test reports
         if: failure()
         uses: actions/upload-artifact@v7
