@@ -119,6 +119,7 @@ tasks.withType<Test>().configureEach {
     failFast = failFastValue
     systemProperty("testRetryCount", providers.gradleProperty("testRetryCount").getOrElse("1"))
     systemProperty("testFailFast", failFastValue.toString())
+    systemProperty("java.net.preferIPv4Stack", "true")
     jvmArgs(
         "--add-opens", "java.base/jdk.internal.loader=ALL-UNNAMED",
         "--add-opens", "java.base/java.lang=ALL-UNNAMED",
