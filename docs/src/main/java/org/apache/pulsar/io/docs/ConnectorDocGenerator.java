@@ -28,6 +28,7 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -51,8 +52,11 @@ public class ConnectorDocGenerator implements Callable<Integer> {
     private static Reflections newReflections() throws Exception {
         final String[] classpathList = System.getProperty("java.class.path").split(":");
         final List<URL> urlList = new ArrayList<>();
-        for (String file : classpathList) {
-            urlList.add(new File(file).toURI().toURL());
+        for (String cp : classpathList) {
+            File file = new File(cp);
+            if (file.isFile() && cp.endsWith(".nar")) {
+                urlList.add(new URL("jar:" + file.toURI() + "!/"));
+            }
         }
         return new Reflections(new ConfigurationBuilder().setUrls(urlList));
     }
@@ -70,7 +74,7 @@ public class ConnectorDocGenerator implements Callable<Integer> {
 
         Field[] fields = configClass.getDeclaredFields();
         for (Field field : fields) {
-            if (Modifier.isStatic(field.getModifiers())) {
+            if (Modifier.isStatic(field.getModifiers()) || Modifier.isTransient(field.getModifiers())) {
                 continue;
             }
             FieldDoc fieldDoc = field.getDeclaredAnnotation(FieldDoc.class);
@@ -107,12 +111,16 @@ public class ConnectorDocGenerator implements Callable<Integer> {
         Set<Class<?>> connectorClasses = reflections.getTypesAnnotatedWith(Connector.class);
         log.info("Retrieve all `Connector` annotated classes : {}", connectorClasses);
 
+        Path outputDirPath = Path.of(outputDir);
+        if (!Files.exists(outputDirPath)) {
+            Files.createDirectories(outputDirPath);
+        }
         for (Class<?> connectorClass : connectorClasses) {
             final Connector connectorDef = connectorClass.getDeclaredAnnotation(Connector.class);
             final String name = connectorDef.name().toLowerCase();
             final String type = connectorDef.type().name().toLowerCase();
             final String filename = "pulsar-io-%s-%s.yml".formatted(name, type);
-            final Path outputPath = Path.of(outputDir, filename);
+            final Path outputPath = outputDirPath.resolve(filename);
             try (FileOutputStream fos = new FileOutputStream(outputPath.toFile())) {
                 PrintWriter pw = new PrintWriter(new OutputStreamWriter(fos, StandardCharsets.UTF_8));
                 generateConnectorYamlFile(connectorClass, connectorDef, pw);
@@ -125,7 +133,7 @@ public class ConnectorDocGenerator implements Callable<Integer> {
             names = {"-o", "--output-dir"},
             description = "The output dir to dump connector docs",
             required = true)
-    String outputDir = null;
+    String outputDir;
 
     @Option(names = {"-h", "--help"}, usageHelp = true, description = "Show this help message")
     boolean help = false;
