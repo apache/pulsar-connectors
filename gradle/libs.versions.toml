@@ -171,7 +171,6 @@ confluent = "8.1.1"
 opensearch = "2.19.4"
 elasticsearch-java = "8.15.3"
 debezium = "3.4.2.Final"
-debezium-mysql-connector = "9.4.0"
 kubernetesclient = "23.0.0"
 # IO connector specific
 aerospike-client = "4.5.0"
@@ -457,17 +456,19 @@ kafka-connect-avro-converter = { module = "io.confluent:kafka-connect-avro-conve
 opensearch-rest-high-level-client = { module = "org.opensearch.client:opensearch-rest-high-level-client", version.ref = "opensearch" }
 elasticsearch-java = { module = "co.elastic.clients:elasticsearch-java", version.ref = "elasticsearch-java" }
 # Debezium
-debezium-core = { module = "io.debezium:debezium-core", version.ref = "debezium" }
-debezium-connector-mysql = { module = "io.debezium:debezium-connector-mysql", version.ref = "debezium" }
-debezium-connector-mongodb = { module = "io.debezium:debezium-connector-mongodb", version.ref = "debezium" }
-debezium-connector-postgres = { module = "io.debezium:debezium-connector-postgres", version.ref = "debezium" }
-debezium-connector-oracle = { module = "io.debezium:debezium-connector-oracle", version.ref = "debezium" }
-debezium-connector-sqlserver = { module = "io.debezium:debezium-connector-sqlserver", version.ref = "debezium" }
+debezium-bom = { module = "io.debezium:debezium-bom", version.ref = "debezium" }
+debezium-core = { module = "io.debezium:debezium-core" }
+debezium-connector-mysql = { module = "io.debezium:debezium-connector-mysql" }
+debezium-connector-mongodb = { module = "io.debezium:debezium-connector-mongodb" }
+debezium-connector-postgres = { module = "io.debezium:debezium-connector-postgres" }
+debezium-connector-oracle = { module = "io.debezium:debezium-connector-oracle" }
+debezium-connector-sqlserver = { module = "io.debezium:debezium-connector-sqlserver" }
 # Database drivers
 postgresql-jdbc = "org.postgresql:postgresql:42.7.10"
 sqlite-jdbc = "org.xerial:sqlite-jdbc:3.47.1.0"
 clickhouse-jdbc = "com.clickhouse:clickhouse-jdbc:0.4.6"
 mariadb-jdbc = "org.mariadb.jdbc:mariadb-java-client:3.5.5"
+mysql-connector-j = "com.mysql:mysql-connector-j:9.4.0"
 openmldb-jdbc = { module = "com.4paradigm.openmldb:openmldb-jdbc", version.ref = "openmldb" }
 openmldb-native = { module = "com.4paradigm.openmldb:openmldb-native", version.ref = "openmldb" }
 # JClouds
