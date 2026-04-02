@@ -22,13 +22,10 @@ plugins {
     id("pulsar-connectors.nar-conventions")
 }
 
-
 // KafkaBytesSource uses SchemaInfoImpl from pulsar-common, which is excluded from
-// NAR runtimeClasspath by the global exclusion. Bundle it via a separate configuration
-// since the NAR classloader's parent (rootClassLoader) only has java-instance.jar.
-val narExtraDeps by configurations.creating {
-    isCanBeResolved = true
-    isCanBeConsumed = false
+// NAR runtimeClasspath by default. Include it in the NAR bundle.
+pulsarConnectorsNar {
+    includePulsarModule("pulsar-common")
 }
 
 dependencies {
@@ -36,7 +33,6 @@ dependencies {
     implementation(libs.pulsar.io.core)
     implementation(libs.pulsar.common)
     implementation(libs.pulsar.client)
-    narExtraDeps(libs.pulsar.common)
     implementation(libs.jackson.databind)
     implementation(libs.jackson.dataformat.yaml)
     implementation(libs.guava)
@@ -52,10 +48,4 @@ dependencies {
     testImplementation(libs.hamcrest)
     testImplementation(libs.awaitility)
     testImplementation(libs.bcpkix.jdk18on)
-}
-
-tasks.named<io.github.merlimat.gradle.nar.NarTask>("nar") {
-    from(narExtraDeps) { into("META-INF/bundled-dependencies") }
-    bundledDependencies.from(narExtraDeps)
-    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
 }

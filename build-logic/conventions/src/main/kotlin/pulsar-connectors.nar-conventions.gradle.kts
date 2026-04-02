@@ -25,11 +25,35 @@ plugins {
     id("io.github.merlimat.nar")
 }
 
+/**
+ * Extension for customizing NAR packaging behavior.
+ *
+ * By default, Pulsar platform modules (pulsar-common, pulsar-client, etc.) are excluded
+ * from the NAR's bundled dependencies since they are provided at runtime by Pulsar's
+ * classloader hierarchy. Subprojects can include specific modules when needed:
+ *
+ * ```kotlin
+ * pulsarConnectorsNar {
+ *     // Include pulsar-common in the NAR bundle (e.g., for SchemaInfoImpl)
+ *     includePulsarModule("pulsar-common")
+ * }
+ * ```
+ */
+open class PulsarConnectorsNarExtension {
+    internal val includedPulsarModules: MutableSet<String> = mutableSetOf()
+
+    fun includePulsarModule(module: String) {
+        includedPulsarModules.add(module)
+    }
+}
+
+val pulsarConnectorsNar = extensions.create<PulsarConnectorsNarExtension>("pulsarConnectorsNar")
+
 // NAR modules should not bundle Pulsar platform dependencies — they are provided
 // at runtime by Pulsar's classloader hierarchy.
 // Note: pulsar-io-common is NOT in java-instance.jar (runtime-all), so it must be
 // bundled in each NAR that uses it (e.g., IOConfigUtils).
-val pulsarPlatformModules = setOf(
+val defaultExcludedPulsarModules = setOf(
     "pulsar-client-api",
     "pulsar-client-admin-api",
     "pulsar-client-original",
@@ -49,13 +73,18 @@ val pulsarPlatformModules = setOf(
     "pulsar-package-core",
 )
 
+// Use withDependencies to defer exclusion logic until after subproject build scripts
+// have configured the extension.
 configurations.named("runtimeClasspath") {
     exclude(group = "org.apache.bookkeeper")
     // Protobuf is in java-instance.jar (runtime-all), so NARs must not bundle it.
     // Bundling a different version causes GeneratedMessage.getUnknownFields() conflicts.
     exclude(group = "com.google.protobuf")
-    pulsarPlatformModules.forEach { module ->
-        exclude(group = "org.apache.pulsar", module = module)
+    withDependencies {
+        val excludedModules = defaultExcludedPulsarModules - pulsarConnectorsNar.includedPulsarModules
+        excludedModules.forEach { module ->
+            exclude(group = "org.apache.pulsar", module = module)
+        }
     }
 }
 
