@@ -91,3 +91,24 @@ if (parentProject != null && parentProject != rootProject && parentProject.paren
     val narIdProp = narExt.javaClass.getMethod("getNarId").invoke(narExt) as org.gradle.api.provider.Property<String>
     narIdProp.set(qualifiedName)
 }
+
+tasks.named<Jar>("jar") {
+    enabled = false
+}
+
+configurations {
+    named("runtimeElements") {
+        outgoing {
+            artifacts.clear()
+            artifact(tasks.named("nar"))
+            variants.clear()
+        }
+    }
+    named("apiElements") {
+        outgoing {
+            artifacts.clear()
+            artifact(tasks.named("nar"))
+            variants.clear()
+        }
+    }
+}
