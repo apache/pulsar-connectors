@@ -24,11 +24,12 @@ plugins {
 
 val alluxioVersion = "2.9.4"
 
-// Alluxio requires older versions of netty, grpc, jetty, and metrics than the shared platform
-// provides. Use non-enforced (non-strict) shared platform so the alluxio-specific enforced BOMs
-// below can override individual version constraints.
+// Alluxio requires older versions of netty, grpc, and jetty than the shared platform provides.
+// Exclude these BOMs from the enforced platform so the alluxio-specific versions below can apply.
 pulsarConnectorsDependencies {
-    enforced = false
+    exclude(libs.jetty.bom)
+    exclude(libs.netty.bom)
+    exclude(libs.grpc.bom)
 }
 
 dependencies {

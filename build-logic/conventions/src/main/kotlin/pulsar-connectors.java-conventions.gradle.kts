@@ -62,9 +62,13 @@ if (project.name !in modulesUsingBcFips) {
  *
  * ```kotlin
  * pulsarConnectorsDependencies {
- *     // Exclude specific dependencies from the platform so they can be overridden locally.
- *     // Useful when a module needs an older version of a BOM or library (e.g. alluxio needs
- *     // older netty/grpc).
+ *     // Exclude using a version catalog reference:
+ *     exclude(libs.netty.bom)
+ *
+ *     // Exclude using "group:module" notation:
+ *     exclude("io.netty:netty-bom")
+ *
+ *     // Exclude using named parameters:
  *     exclude(group = "io.netty", module = "netty-bom")
  *
  *     // Set enforced = false to use platform() instead of enforcedPlatform(). This makes all
@@ -82,6 +86,17 @@ open class PulsarConnectorsDependenciesExtension {
 
     fun exclude(group: String, module: String) {
         excludes.add(DependencyExclusion(group, module))
+    }
+
+    fun exclude(dependency: Provider<MinimalExternalModuleDependency>) {
+        val dep = dependency.get()
+        excludes.add(DependencyExclusion(dep.module.group, dep.module.name))
+    }
+
+    fun exclude(notation: String) {
+        val parts = notation.split(":")
+        require(parts.size == 2) { "Expected 'group:module' format, got: $notation" }
+        excludes.add(DependencyExclusion(parts[0], parts[1]))
     }
 }
 
