@@ -41,14 +41,6 @@ configurations.all {
     // Pulsar uses SLF4J 2.x with log4j-slf4j2-impl; having both causes
     // NoSuchMethodError in Log4jLoggerFactory at test startup.
     exclude(group = "org.apache.logging.log4j", module = "log4j-slf4j-impl")
-
-    // Force Jackson version to match the version catalog. Transitive dependencies
-    // (e.g. from jackson-bom) can pull in newer versions that break API compatibility.
-    resolutionStrategy.eachDependency {
-        if (requested.group.startsWith("com.fasterxml.jackson")) {
-            useVersion(catalog.findVersion("jackson").get().requiredVersion)
-        }
-    }
 }
 
 // Exclude bc-fips from modules that don't need it. bc-fips's CryptoServicesRegistrar

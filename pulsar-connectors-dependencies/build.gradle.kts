@@ -37,11 +37,14 @@ dependencies {
     // BOM entries (detected by module name) are imported as platforms rather than constraints.
     catalog.libraryAliases.forEach { alias ->
         catalog.findLibrary(alias).ifPresent { provider ->
-            val module = provider.get().module
+            val dep = provider.get()
+            val module = dep.module
             if (module.name.endsWith("-bom") || module.name.endsWith("_bom") || module.name == "bom"
                     || module.name.contains("-bom-") || module.name.contains("_bom_")) {
                 api(platform(provider))
-            } else {
+            } else if (dep.versionConstraint.requiredVersion.isNotEmpty()) {
+                // Only add constraints for entries with explicit versions.
+                // Versionless entries are managed by BOMs imported above.
                 constraints.api(provider)
             }
         }
