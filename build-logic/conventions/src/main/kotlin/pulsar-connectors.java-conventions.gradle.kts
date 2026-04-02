@@ -181,6 +181,7 @@ tasks.withType<Test>().configureEach {
         "-XX:+EnableDynamicAgentLoading",
         "-Xshare:off",
         "-Dio.netty.tryReflectionSetAccessible=true",
+        "-Dorg.apache.pulsar.shade.io.netty.tryReflectionSetAccessible=true",
         "-Dpulsar.allocator.pooled=true",
         "-Dpulsar.allocator.exit_on_oom=false",
         "-Dpulsar.allocator.out_of_memory_policy=FallbackToHeap",
