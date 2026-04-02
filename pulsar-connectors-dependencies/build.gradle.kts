@@ -34,13 +34,11 @@ dependencies {
     // Iterate over all library declarations in the version catalog and add them as constraints.
     // This ensures that any transitive dependency matching a catalog entry gets pinned to
     // the version we specify, regardless of what version a transitive dependency requests.
-    // BOM entries (detected by module name) are imported as platforms rather than constraints.
+    // BOM entries (detected by alias name) are imported as platforms rather than constraints.
     catalog.libraryAliases.forEach { alias ->
         catalog.findLibrary(alias).ifPresent { provider ->
             val dep = provider.get()
-            val module = dep.module
-            if (module.name.endsWith("-bom") || module.name.endsWith("_bom") || module.name == "bom"
-                    || module.name.contains("-bom-") || module.name.contains("_bom_")) {
+            if (alias.endsWith(".bom")) {
                 api(platform(provider))
             } else if (dep.versionConstraint.requiredVersion.isNotEmpty()) {
                 // Only add constraints for entries with explicit versions.
