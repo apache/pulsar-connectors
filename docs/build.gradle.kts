@@ -17,6 +17,10 @@
  * under the License.
  */
 
+plugins {
+    id("pulsar-connectors.java-conventions")
+}
+
 dependencies {
     implementation(libs.pulsar.io.core)
     implementation(libs.guava)
@@ -51,6 +55,34 @@ dependencies {
     implementation(project(":rabbitmq"))
     implementation(project(":redis"))
     implementation(project(":solr"))
-    implementation(project(":alluxio"))
+    implementation(project(":alluxio")) {
+        exclude("org.eclipse.jetty", "jetty-bom")
+        exclude("io.netty", "netty-bom")
+        exclude("io.grpc", "grpc-bom")
+    }
     implementation(project(":azure-data-explorer"))
+}
+
+val exportClasspath by tasks.registering {
+    dependsOn(tasks.classes)
+    val classpath = sourceSets.main.get().output + configurations.runtimeClasspath.get()
+    inputs.files(classpath)
+    val outputFile = layout.buildDirectory.file("classpath.txt")
+    outputs.file(outputFile)
+    doLast {
+        outputFile.get().asFile.apply {
+            parentFile.mkdirs()
+            writeText(classpath.asPath)
+        }
+    }
+}
+
+tasks.register<JavaExec>("generateConnectorDocs") {
+    dependsOn(tasks.classes)
+    mainClass.set("org.apache.pulsar.io.docs.ConnectorDocGenerator")
+    classpath = sourceSets.main.get().output + configurations.runtimeClasspath.get()
+    inputs.files(classpath)
+    val outputDir = layout.buildDirectory.dir("connector-docs")
+    outputs.dir(outputDir)
+    args("-o", outputDir.get().asFile.absolutePath)
 }

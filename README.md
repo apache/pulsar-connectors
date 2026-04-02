@@ -66,24 +66,46 @@ mounting them into the `apachepulsar/pulsar` Docker image.
 |-----------|-------------|
 | Kafka Connect Adaptor | Run Kafka Connect connectors on Pulsar |
 
+## Prerequisites
+
+- **JDK 17** or later — e.g. [Eclipse Temurin](https://adoptium.net/en-GB/temurin/releases?version=17&os=any&arch=any)
+  or [Amazon Corretto](https://docs.aws.amazon.com/corretto/latest/corretto-17-ug/what-is-corretto-17.html)
+
+> **Note**: This project includes a [Gradle Wrapper](https://docs.gradle.org/current/userguide/gradle_wrapper.html)
+> so no separate Gradle installation is needed. Use `./gradlew` on Linux/macOS and `gradlew.bat` on Windows.
+
 ## Building
 
-```bash
-./gradlew build -x test
-```
-
-To build all connector NARs:
+Compile and assemble all modules:
 
 ```bash
-./gradlew build -x test
+./gradlew assemble
 ```
 
 NAR files are produced under each connector's `build/libs/` directory.
 
-To build the distribution tarball containing all connector NARs:
+Build a specific connector:
+
+```bash
+./gradlew :elastic-search:assemble
+```
+
+Build the distribution package containing all connector NARs:
 
 ```bash
 ./gradlew :distribution:pulsar-io-distribution:assemble
+```
+
+Check source code license headers:
+
+```bash
+./gradlew rat spotlessCheck
+```
+
+Auto-fix license headers:
+
+```bash
+./gradlew spotlessApply
 ```
 
 ## Running Tests
@@ -94,6 +116,9 @@ To build the distribution tarball containing all connector NARs:
 
 # Specific connector
 ./gradlew :elastic-search:test
+
+# Specific test class
+./gradlew :elastic-search:test --tests "ElasticSearchSinkTests"
 ```
 
 ## Using Connectors

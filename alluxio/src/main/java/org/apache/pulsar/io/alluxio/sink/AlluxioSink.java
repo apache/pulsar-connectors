@@ -151,11 +151,7 @@ public class AlluxioSink implements Sink<GenericObject> {
                 } catch (AlluxioException | IOException e) {
                     log.error("Unable to flush records to alluxio.", e);
                     failRecords();
-                    try {
-                        deleteTmpFile();
-                    } catch (AlluxioException | IOException e1) {
-                        log.error("Failed to delete tmp cache file.", e);
-                    }
+                    deleteTmpFile();
                     break;
                 }
             case FILE_COMMITTED:
@@ -224,10 +220,11 @@ public class AlluxioSink implements Sink<GenericObject> {
     }
 
     private void closeAndCommitTmpFile() throws AlluxioException, IOException {
-        // close the tmpFile
-        if (fileOutStream != null) {
-            fileOutStream.close();
+        if (fileOutStream == null) {
+            return;
         }
+        // close the tmpFile
+        fileOutStream.close();
         // commit the tmpFile
         String filePrefix = alluxioSinkConfig.getFilePrefix();
         String fileExtension = alluxioSinkConfig.getFileExtension();
@@ -240,9 +237,14 @@ public class AlluxioSink implements Sink<GenericObject> {
         lastRotationTime = System.currentTimeMillis();
     }
 
-    private void deleteTmpFile() throws AlluxioException, IOException {
-        if (!tmpFilePath.equals("")) {
+    private void deleteTmpFile() {
+        if (tmpFilePath == null || tmpFilePath.isEmpty()) {
+            return;
+        }
+        try {
             fileSystem.delete(new AlluxioURI(tmpFilePath));
+        } catch (Exception e) {
+            log.warn("Failed to delete tmp file {}", tmpFilePath, e);
         }
     }
 

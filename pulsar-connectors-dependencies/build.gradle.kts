@@ -19,7 +19,7 @@
 
 // Enforced platform module that declares version constraints for all dependencies.
 // This is the Gradle equivalent of Maven's dependencyManagement section.
-// All subprojects consume this via: implementation(enforcedPlatform(project(":pulsar-dependencies")))
+// All subprojects consume this via: implementation(enforcedPlatform(project(":pulsar-connectors-dependencies")))
 plugins {
     `java-platform`
 }
@@ -30,14 +30,20 @@ javaPlatform {
 }
 
 dependencies {
-    constraints {
-        // Iterate over all library declarations in the version catalog and add them as constraints.
-        // This ensures that any transitive dependency matching a catalog entry gets pinned to
-        // the version we specify, regardless of what version a transitive dependency requests.
-        val catalog = project.extensions.getByType<VersionCatalogsExtension>().named("libs")
-        catalog.libraryAliases.forEach { alias ->
-            catalog.findLibrary(alias).ifPresent { provider ->
-                api(provider)
+    val catalog = project.extensions.getByType<VersionCatalogsExtension>().named("libs")
+    // Iterate over all library declarations in the version catalog and add them as constraints.
+    // This ensures that any transitive dependency matching a catalog entry gets pinned to
+    // the version we specify, regardless of what version a transitive dependency requests.
+    // BOM entries (detected by alias name) are imported as platforms rather than constraints.
+    catalog.libraryAliases.forEach { alias ->
+        catalog.findLibrary(alias).ifPresent { provider ->
+            val dep = provider.get()
+            if (alias.endsWith(".bom")) {
+                api(platform(provider))
+            } else if (dep.versionConstraint.requiredVersion.isNotEmpty()) {
+                // Only add constraints for entries with explicit versions.
+                // Versionless entries are managed by BOMs imported above.
+                constraints.api(provider)
             }
         }
     }

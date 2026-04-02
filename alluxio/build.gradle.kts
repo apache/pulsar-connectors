@@ -18,14 +18,33 @@
  */
 
 plugins {
-    alias(libs.plugins.nar)
+    id("pulsar-connectors.java-conventions")
+    id("pulsar-connectors.nar-conventions")
 }
+
+val alluxioVersion = "2.9.4"
+
+// Alluxio requires older versions of netty, grpc, and jetty than the shared platform provides.
+// Exclude these BOMs from the enforced platform so the alluxio-specific versions below can apply.
+pulsarConnectorsDependencies {
+    exclude(libs.jetty.bom)
+    exclude(libs.netty.bom)
+    exclude(libs.grpc.bom)
+}
+
 dependencies {
+    // Alluxio-compatible BOMs — these override the shared platform versions.
+    implementation(enforcedPlatform(libs.jetty9.bom))
+    implementation(enforcedPlatform("io.netty:netty-bom:4.1.100.Final"))
+    implementation(enforcedPlatform("io.grpc:grpc-bom:1.37.0"))
+
     implementation(libs.pulsar.io.core)
-    implementation("org.alluxio:alluxio-core-client-fs:2.9.3")
+    implementation("org.alluxio:alluxio-core-client-fs:$alluxioVersion")
     implementation(libs.jackson.dataformat.yaml)
     implementation(libs.guava)
 
     testImplementation(libs.pulsar.client)
-    testImplementation("org.alluxio:alluxio-minicluster:2.9.3")
+    testImplementation("org.alluxio:alluxio-minicluster:$alluxioVersion") {
+        exclude(group = "org.glassfish", module = "javax.el")
+    }
 }

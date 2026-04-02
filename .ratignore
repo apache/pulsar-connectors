@@ -1,0 +1,48 @@
+# Build artifacts
+**/build/**
+**/target/**
+# Gradle files
+.gradle/**
+gradle/wrapper/**
+**/.gradle/**
+**/.kotlin/**
+**/gradle/wrapper/**
+gradlew
+gradlew.bat
+gradle/libs.versions.toml
+# Generated Flatbuffer files (Kinesis)
+**/org/apache/pulsar/io/kinesis/fbs/*.java
+# Services files
+**/META-INF/services/*
+# Certificates and keys
+**/*.crt
+**/*.key
+**/*.csr
+**/*.pem
+**/*.srl
+**/certificate-authority/serial
+**/certificate-authority/index.txt
+**/*.json
+**/*.txt
+# Project/IDE files
+**/*.md
+.github/**
+**/*.nar
+**/.gitignore
+**/.gitattributes
+**/*.iml
+**/.classpath
+**/.project
+**/.settings
+**/.idea/**
+**/.vscode/**
+# Avro schemas
+**/*.avsc
+# Patch files
+**/*.patch
+# Hidden directories
+.*/**
+# Test output
+**/test-output/**
+# Log files
+**/*.log

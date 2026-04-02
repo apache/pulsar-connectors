@@ -17,6 +17,10 @@
  * under the License.
  */
 
+plugins {
+    id("pulsar-connectors.java-conventions")
+}
+
 dependencies {
     api(libs.pulsar.io.common)
     api(libs.pulsar.io.core)

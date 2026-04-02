@@ -18,9 +18,9 @@
  */
 
 // Docker image module — no Java compilation needed
-tasks.named("compileJava") { enabled = false }
-tasks.named("compileTestJava") { enabled = false }
-tasks.named("jar") { enabled = false }
+plugins {
+    base
+}
 
 val catalog = extensions.getByType<VersionCatalogsExtension>().named("libs")
 val pulsarConnectorsVersion = project.version.toString()

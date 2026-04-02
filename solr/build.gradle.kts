@@ -18,10 +18,11 @@
  */
 
 plugins {
-    alias(libs.plugins.nar)
+    id("pulsar-connectors.java-conventions")
+    id("pulsar-connectors.nar-conventions")
 }
 // Solr 9.x embeds Jetty 10.x, which is incompatible with Pulsar's Jetty 12.
-// The pulsar-dependencies platform enforces Jetty 12 strict versions, which override
+// The pulsar-connectors-dependencies platform enforces Jetty 12 strict versions, which override
 // enforcedPlatform("jetty-bom:10.0.24") because Gradle picks the highest strict version.
 // Use resolutionStrategy.force to downgrade Jetty to 10.0.24 for test configurations.
 val jetty10Version = "10.0.24"

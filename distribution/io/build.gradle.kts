@@ -18,9 +18,9 @@
  */
 
 // Distribution module — no Java compilation needed
-tasks.named("compileJava") { enabled = false }
-tasks.named("compileTestJava") { enabled = false }
-tasks.named("jar") { enabled = false }
+plugins {
+    base
+}
 
 val pulsarVersion = project.version.toString()
 
