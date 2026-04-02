@@ -55,6 +55,10 @@ dependencies {
     implementation(project(":rabbitmq"))
     implementation(project(":redis"))
     implementation(project(":solr"))
-    implementation(project(":alluxio"))
+    implementation(project(":alluxio")) {
+        exclude("org.eclipse.jetty", "jetty-bom")
+        exclude("io.netty", "netty-bom")
+        exclude("io.grpc", "grpc-bom")
+    }
     implementation(project(":azure-data-explorer"))
 }
