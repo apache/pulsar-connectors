@@ -518,20 +518,21 @@ bookkeeper-stats-api = { module = "org.apache.bookkeeper.stats:bookkeeper-stats-
 datasketches-memory = "org.apache.datasketches:datasketches-memory:2.2.0"
 datasketches-java = "org.apache.datasketches:datasketches-java:6.1.1"
 # Pulsar core modules (published Maven artifacts, used by connectors)
-pulsar-io-core = { module = "org.apache.pulsar:pulsar-io-core", version.ref = "pulsar" }
-pulsar-io-common = { module = "org.apache.pulsar:pulsar-io-common", version.ref = "pulsar" }
-pulsar-common = { module = "org.apache.pulsar:pulsar-common", version.ref = "pulsar" }
-pulsar-client-api = { module = "org.apache.pulsar:pulsar-client-api", version.ref = "pulsar" }
-pulsar-client = { module = "org.apache.pulsar:pulsar-client-original", version.ref = "pulsar" }
-pulsar-client-admin = { module = "org.apache.pulsar:pulsar-client-admin-original", version.ref = "pulsar" }
-pulsar-config-validation = { module = "org.apache.pulsar:pulsar-config-validation", version.ref = "pulsar" }
-pulsar-functions-api = { module = "org.apache.pulsar:pulsar-functions-api", version.ref = "pulsar" }
-pulsar-functions-instance = { module = "org.apache.pulsar:pulsar-functions-instance", version.ref = "pulsar" }
-pulsar-functions-utils = { module = "org.apache.pulsar:pulsar-functions-utils", version.ref = "pulsar" }
-pulsar-broker = { module = "org.apache.pulsar:pulsar-broker", version.ref = "pulsar" }
-pulsar-broker-test = { module = "org.apache.pulsar:pulsar-broker", version.ref = "pulsar" }
-pulsar-testmocks = { module = "org.apache.pulsar:testmocks", version.ref = "pulsar" }
-pulsar-buildtools = { module = "org.apache.pulsar:buildtools", version.ref = "pulsar" }
+pulsar-bom = { module = "org.apache.pulsar:pulsar-bom", version.ref = "pulsar" }
+pulsar-io-core = { module = "org.apache.pulsar:pulsar-io-core" }
+pulsar-io-common = { module = "org.apache.pulsar:pulsar-io-common" }
+pulsar-common = { module = "org.apache.pulsar:pulsar-common" }
+pulsar-client-api = { module = "org.apache.pulsar:pulsar-client-api" }
+pulsar-client = { module = "org.apache.pulsar:pulsar-client-original" }
+pulsar-client-admin = { module = "org.apache.pulsar:pulsar-client-admin-original" }
+pulsar-config-validation = { module = "org.apache.pulsar:pulsar-config-validation" }
+pulsar-functions-api = { module = "org.apache.pulsar:pulsar-functions-api" }
+pulsar-functions-instance = { module = "org.apache.pulsar:pulsar-functions-instance" }
+pulsar-functions-utils = { module = "org.apache.pulsar:pulsar-functions-utils" }
+pulsar-broker = { module = "org.apache.pulsar:pulsar-broker" }
+pulsar-broker-test = { module = "org.apache.pulsar:pulsar-broker" }
+pulsar-testmocks = { module = "org.apache.pulsar:testmocks" }
+pulsar-buildtools = { module = "org.apache.pulsar:buildtools" }
 
 [plugins]
 lightproto = { id = "io.streamnative.lightproto", version.ref = "lightproto" }
