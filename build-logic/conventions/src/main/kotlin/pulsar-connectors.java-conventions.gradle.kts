@@ -24,6 +24,11 @@ plugins {
 
 val catalog = the<VersionCatalogsExtension>().named("libs")
 
+fun lib(alias: String): Provider<MinimalExternalModuleDependency> =
+    catalog.findLibrary(alias).orElseThrow {
+        GradleException("Library alias '$alias' not found in version catalog 'libs'")
+    }
+
 group = "org.apache.pulsar"
 version = catalog.findVersion("pulsar-connectors").get().requiredVersion
 
@@ -118,26 +123,26 @@ dependencies {
     }
 
     // Annotation processing for Lombok
-    "compileOnly"(catalog.findLibrary("lombok").get())
-    "annotationProcessor"(catalog.findLibrary("lombok").get())
-    "testCompileOnly"(catalog.findLibrary("lombok").get())
-    "testAnnotationProcessor"(catalog.findLibrary("lombok").get())
+    "compileOnly"(lib("lombok"))
+    "annotationProcessor"(lib("lombok"))
+    "testCompileOnly"(lib("lombok"))
+    "testAnnotationProcessor"(lib("lombok"))
 
     // Common test dependencies
-    "testImplementation"(catalog.findLibrary("testng").get())
-    "testImplementation"(catalog.findLibrary("mockito-core").get())
-    "testImplementation"(catalog.findLibrary("assertj-core").get())
-    "testImplementation"(catalog.findLibrary("awaitility").get())
-    "testImplementation"(catalog.findLibrary("system-lambda").get())
-    "testImplementation"(catalog.findLibrary("slf4j-api").get())
+    "testImplementation"(lib("testng"))
+    "testImplementation"(lib("mockito-core"))
+    "testImplementation"(lib("assertj-core"))
+    "testImplementation"(lib("awaitility"))
+    "testImplementation"(lib("system-lambda"))
+    "testImplementation"(lib("slf4j-api"))
 
     // Logging runtime for tests — provides Log4j2 as the SLF4J backend.
     // Some connectors (Alluxio minicluster, Solr embedded) require a logging
     // implementation to be present at test runtime.
-    "testRuntimeOnly"(catalog.findLibrary("log4j-api").get())
-    "testRuntimeOnly"(catalog.findLibrary("log4j-core").get())
-    "testRuntimeOnly"(catalog.findLibrary("log4j-slf4j2-impl").get())
-    "testRuntimeOnly"(catalog.findLibrary("jcl-over-slf4j").get())
+    "testRuntimeOnly"(lib("log4j-api"))
+    "testRuntimeOnly"(lib("log4j-core"))
+    "testRuntimeOnly"(lib("log4j-slf4j2-impl"))
+    "testRuntimeOnly"(lib("jcl-over-slf4j"))
 }
 
 tasks.withType<Test>().configureEach {
