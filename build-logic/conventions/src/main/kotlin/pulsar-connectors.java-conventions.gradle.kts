@@ -29,9 +29,6 @@ fun lib(alias: String): Provider<MinimalExternalModuleDependency> =
         GradleException("Library alias '$alias' not found in version catalog 'libs'")
     }
 
-group = "org.apache.pulsar"
-version = catalog.findVersion("pulsar-connectors").get().requiredVersion
-
 // Add shared test resources (log4j2-test.xml) to the test classpath for all modules.
 the<SourceSetContainer>()["test"].resources.srcDir(rootProject.file("gradle/test-resources"))
 

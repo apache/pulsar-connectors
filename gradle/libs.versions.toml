@@ -19,7 +19,6 @@
 [versions]
 # Core
 pulsar = "4.1.3"
-pulsar-connectors = "4.3.0-SNAPSHOT"
 java = "17"
 # Code quality
 checkstyle = "13.3.0"

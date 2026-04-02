@@ -64,14 +64,6 @@ tasks.named<org.nosphere.apache.rat.RatTask>("rat").configure {
     exclude(ratignoreFile.readLines().map { it.trim() }.filter { it.isNotBlank() && !it.startsWith("#") })
 }
 
-val catalog = the<VersionCatalogsExtension>().named("libs")
-val pulsarConnectorsVersion = catalog.findVersion("pulsar-connectors").get().requiredVersion
-
-allprojects {
-    group = "org.apache.pulsar"
-    version = pulsarConnectorsVersion
-}
-
 idea {
     project {
         settings {
