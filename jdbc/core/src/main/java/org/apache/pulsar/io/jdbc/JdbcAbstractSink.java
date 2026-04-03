@@ -33,6 +33,7 @@ import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
@@ -78,8 +79,12 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
     private Deque<Record<T>> incomingList;
     private AtomicBoolean isFlushing;
     private int batchSize;
+    private int maxQueueSize;
     private ScheduledExecutorService flushExecutor;
+    private ScheduledFuture<?> scheduledFlushTask;
     private SinkContext sinkContext;
+    private Properties connectionProperties;
+    private volatile boolean queueFullLogged = false;
     private final AtomicReference<State> state = new AtomicReference<>(State.OPEN);
 
     @Override
@@ -93,17 +98,17 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
             throw new IllegalArgumentException("Required jdbc Url not set.");
         }
 
-        Properties properties = new Properties();
+        connectionProperties = new Properties();
         String username = jdbcSinkConfig.getUserName();
         String password = jdbcSinkConfig.getPassword();
         if (username != null) {
-            properties.setProperty("user", username);
+            connectionProperties.setProperty("user", username);
         }
         if (password != null) {
-            properties.setProperty("password", password);
+            connectionProperties.setProperty("password", password);
         }
 
-        connection = DriverManager.getConnection(jdbcSinkConfig.getJdbcUrl(), properties);
+        connection = DriverManager.getConnection(jdbcSinkConfig.getJdbcUrl(), connectionProperties);
         connection.setAutoCommit(!jdbcSinkConfig.isUseTransactions());
         log.info("Opened jdbc connection: {}, autoCommit: {}", jdbcUrl, connection.getAutoCommit());
 
@@ -114,12 +119,20 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
 
         int timeoutMs = jdbcSinkConfig.getTimeoutMs();
         batchSize = jdbcSinkConfig.getBatchSize();
+        maxQueueSize = jdbcSinkConfig.getMaxQueueSize();
+        if (maxQueueSize == 0) {
+            // Auto-size: default to 10x batch size
+            maxQueueSize = batchSize > 0 ? batchSize * 10 : 10000;
+        }
+        // maxQueueSize < 0 (e.g. -1) means unbounded (legacy behavior)
+        log.info("JDBC sink queue capacity: {}", maxQueueSize > 0 ? maxQueueSize : "unbounded");
         incomingList = new LinkedList<>();
         isFlushing = new AtomicBoolean(false);
 
         flushExecutor = Executors.newScheduledThreadPool(1);
         if (timeoutMs > 0) {
-            flushExecutor.scheduleAtFixedRate(this::flush, timeoutMs, timeoutMs, TimeUnit.MILLISECONDS);
+            scheduledFlushTask = flushExecutor.scheduleAtFixedRate(
+                    this::flush, timeoutMs, timeoutMs, TimeUnit.MILLISECONDS);
         }
     }
 
@@ -158,6 +171,10 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
     @Override
     public void close() throws Exception {
         state.set(State.CLOSED);
+        if (scheduledFlushTask != null) {
+            scheduledFlushTask.cancel(false);
+            scheduledFlushTask = null;
+        }
         if (flushExecutor != null) {
             int timeoutMs = jdbcSinkConfig.getTimeoutMs() * 2;
             flushExecutor.shutdown();
@@ -188,8 +205,22 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
 
     @Override
     public void write(Record<T> record) throws Exception {
+        if (state.get() != State.OPEN) {
+            log.warn("Sink is not in OPEN state (current: {}), failing record", state.get());
+            record.fail();
+            return;
+        }
         int number;
         synchronized (incomingList) {
+            if (maxQueueSize > 0 && incomingList.size() >= maxQueueSize) {
+                if (!queueFullLogged) {
+                    log.warn("Internal queue is full ({} >= {}), failing records to apply back-pressure",
+                            incomingList.size(), maxQueueSize);
+                    queueFullLogged = true;
+                }
+                record.fail();
+                return;
+            }
             incomingList.add(record);
             number = incomingList.size();
         }
@@ -239,6 +270,9 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
 
 
     private void flush() {
+        if (state.get() == State.CLOSED) {
+            return;
+        }
         if (incomingList.size() > 0 && isFlushing.compareAndSet(false, true)) {
             boolean needAnotherRound;
             final Deque<Record<T>> swapList = new LinkedList<>();
@@ -259,6 +293,8 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
 
             int count = 0;
             try {
+                ensureConnection();
+
                 PreparedStatement currentBatch = null;
                 final List<Mutation> mutations = swapList
                         .stream()
@@ -308,6 +344,7 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
                 } else {
                     internalFlush(swapList);
                 }
+                queueFullLogged = false;
             } catch (Exception e) {
                 log.error("Got exception {} after {} ms, failing {} messages",
                         e.getMessage(),
@@ -333,6 +370,38 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
             if (log.isDebugEnabled()) {
                 log.debug("Already in flushing state, will not flush, queue size: {}", incomingList.size());
             }
+        }
+    }
+
+    private void ensureConnection() throws Exception {
+        try {
+            if (connection != null && connection.isValid(2)) {
+                return;
+            }
+        } catch (SQLException e) {
+            log.warn("Connection validation failed: {}", e.getMessage());
+        }
+
+        log.info("JDBC connection is invalid, attempting to reconnect to: {}", jdbcUrl);
+        closeConnectionQuietly();
+
+        connection = DriverManager.getConnection(jdbcSinkConfig.getJdbcUrl(), connectionProperties);
+        connection.setAutoCommit(!jdbcSinkConfig.isUseTransactions());
+
+        tableId = JdbcUtils.getTableId(connection, tableName);
+        initStatement();
+
+        log.info("Successfully reconnected to: {}", jdbcUrl);
+    }
+
+    private void closeConnectionQuietly() {
+        if (connection != null) {
+            try {
+                connection.close();
+            } catch (Exception e) {
+                log.debug("Error closing stale connection", e);
+            }
+            connection = null;
         }
     }
 
@@ -404,6 +473,10 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
      */
     private void fatal(Exception e) {
         if (sinkContext != null && state.compareAndSet(State.OPEN, State.FAILED)) {
+            log.error("Fatal error in JDBC sink, signaling framework for shutdown", e);
+            if (scheduledFlushTask != null) {
+                scheduledFlushTask.cancel(false);
+            }
             sinkContext.fatal(e);
         }
     }

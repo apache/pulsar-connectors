@@ -130,6 +130,18 @@ public class JdbcSinkConfig implements Serializable {
     )
     private NullValueAction nullValueAction = NullValueAction.FAIL;
 
+    @FieldDoc(
+            required = false,
+            defaultValue = "0",
+            help = "Maximum number of records to buffer in the internal queue before applying back-pressure. "
+                    + "When the queue is full, incoming records will be failed (negatively acknowledged) so that "
+                    + "the Pulsar consumer can redeliver them later. This prevents out-of-memory errors when the "
+                    + "database connection is slow or broken. "
+                    + "A value of 0 (default) auto-sizes to batchSize * 10. "
+                    + "A value of -1 disables the limit (unbounded, legacy behavior)."
+    )
+    private int maxQueueSize = 0;
+
     public enum InsertMode {
         INSERT,
         UPSERT,

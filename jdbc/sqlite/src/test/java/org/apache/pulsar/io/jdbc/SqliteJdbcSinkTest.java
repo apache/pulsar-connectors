@@ -932,6 +932,151 @@ public class SqliteJdbcSinkTest {
         }
     }
 
+    /**
+     * Test that write() rejects records when the sink is in FAILED state.
+     * After fatal() is called, records should be failed immediately instead of queuing.
+     */
+    @Test
+    public void testWriteRejectsRecordsAfterFatal() throws Exception {
+        jdbcSink.close();
+        jdbcSink = null;
+
+        String jdbcUrl = sqliteUtils.sqliteUri();
+        Map<String, Object> conf = Maps.newHashMap();
+        conf.put("jdbcUrl", jdbcUrl);
+        conf.put("tableName", tableName);
+        conf.put("key", "field3");
+        conf.put("nonKey", "field1,field2");
+        conf.put("batchSize", 1);
+
+        SinkContext mockSinkContext = mock(SinkContext.class);
+        SqliteJdbcAutoSchemaSink sinkWithContext = new SqliteJdbcAutoSchemaSink();
+        try {
+            sinkWithContext.open(conf, mockSinkContext);
+
+            // Force a fatal error by replacing insertStatement with a mock that throws
+            PreparedStatement mockStatement = mock(PreparedStatement.class);
+            doThrow(new SQLException("Connection lost")).when(mockStatement).execute();
+            FieldUtils.writeField(sinkWithContext, "insertStatement", mockStatement, true);
+
+            // Write first record to trigger fatal
+            Foo obj1 = new Foo("f1", "f2", 10);
+            CompletableFuture<Boolean> future1 = new CompletableFuture<>();
+            sinkWithContext.write(createMockFooRecord(obj1, Maps.newHashMap(), future1));
+
+            // Wait for fatal to be called
+            Awaitility.await().atMost(5, TimeUnit.SECONDS).untilAsserted(() ->
+                    verify(mockSinkContext).fatal(any(Throwable.class)));
+
+            // Now write another record — it should be failed immediately
+            Foo obj2 = new Foo("f3", "f4", 11);
+            CompletableFuture<Boolean> future2 = new CompletableFuture<>();
+            sinkWithContext.write(createMockFooRecord(obj2, Maps.newHashMap(), future2));
+
+            // Record should be failed (false), not acked (true)
+            Assert.assertFalse(future2.get(1, TimeUnit.SECONDS));
+        } finally {
+            sinkWithContext.close();
+        }
+    }
+
+    /**
+     * Test that the bounded queue applies back-pressure by failing records when full.
+     */
+    @Test
+    public void testBoundedQueueBackPressure() throws Exception {
+        jdbcSink.close();
+        jdbcSink = null;
+
+        String jdbcUrl = sqliteUtils.sqliteUri();
+        Map<String, Object> conf = Maps.newHashMap();
+        conf.put("jdbcUrl", jdbcUrl);
+        conf.put("tableName", tableName);
+        conf.put("key", "field3");
+        conf.put("nonKey", "field1,field2");
+        // Large batch size so flush is not triggered by writes
+        conf.put("batchSize", 1000);
+        // No time-based flush
+        conf.put("timeoutMs", 0);
+        // Small queue to test back-pressure
+        conf.put("maxQueueSize", 5);
+
+        SqliteJdbcAutoSchemaSink boundedSink = new SqliteJdbcAutoSchemaSink();
+        try {
+            boundedSink.open(conf, null);
+
+            // Fill the queue to capacity
+            List<CompletableFuture<Boolean>> futures = new java.util.ArrayList<>();
+            for (int i = 0; i < 5; i++) {
+                CompletableFuture<Boolean> f = new CompletableFuture<>();
+                futures.add(f);
+                boundedSink.write(createMockFooRecord(new Foo("f1", "f2", i + 100), Maps.newHashMap(), f));
+            }
+
+            // Next write should be rejected due to queue full
+            CompletableFuture<Boolean> overflowFuture = new CompletableFuture<>();
+            boundedSink.write(createMockFooRecord(new Foo("overflow", "val", 999), Maps.newHashMap(), overflowFuture));
+
+            // The overflow record should be failed immediately
+            Assert.assertFalse(overflowFuture.get(1, TimeUnit.SECONDS));
+        } finally {
+            boundedSink.close();
+        }
+    }
+
+    /**
+     * Test that ensureConnection() reconnects when the existing connection becomes invalid.
+     * Simulates a database going away and coming back by closing the connection mid-flight,
+     * then verifying the sink recovers and processes the next batch successfully.
+     */
+    @Test
+    public void testReconnectOnBrokenConnection() throws Exception {
+        jdbcSink.close();
+        jdbcSink = null;
+
+        String jdbcUrl = sqliteUtils.sqliteUri();
+        Map<String, Object> conf = Maps.newHashMap();
+        conf.put("jdbcUrl", jdbcUrl);
+        conf.put("tableName", tableName);
+        conf.put("key", "field3");
+        conf.put("nonKey", "field1,field2");
+        conf.put("batchSize", 1);
+
+        SqliteJdbcAutoSchemaSink reconnectSink = new SqliteJdbcAutoSchemaSink();
+        try {
+            reconnectSink.open(conf, null);
+
+            // First write should succeed — connection is healthy
+            Foo obj1 = new Foo("reconnect1", "val1", 50);
+            CompletableFuture<Boolean> future1 = new CompletableFuture<>();
+            reconnectSink.write(createMockFooRecord(obj1, Maps.newHashMap(), future1));
+            Assert.assertTrue(future1.get(5, TimeUnit.SECONDS));
+
+            // Verify record was persisted
+            int count = sqliteUtils.select("SELECT * FROM " + tableName + " WHERE field3=50", (rs) -> {
+                Assert.assertEquals(rs.getString(1), "reconnect1");
+            });
+            Assert.assertEquals(count, 1);
+
+            // Now break the connection by closing it behind the sink's back
+            reconnectSink.getConnection().close();
+
+            // Next write should trigger ensureConnection() → reconnect → succeed
+            Foo obj2 = new Foo("reconnect2", "val2", 51);
+            CompletableFuture<Boolean> future2 = new CompletableFuture<>();
+            reconnectSink.write(createMockFooRecord(obj2, Maps.newHashMap(), future2));
+            Assert.assertTrue(future2.get(5, TimeUnit.SECONDS));
+
+            // Verify second record was also persisted after reconnect
+            count = sqliteUtils.select("SELECT * FROM " + tableName + " WHERE field3=51", (rs) -> {
+                Assert.assertEquals(rs.getString(1), "reconnect2");
+            });
+            Assert.assertEquals(count, 1);
+        } finally {
+            reconnectSink.close();
+        }
+    }
+
     @SuppressWarnings("unchecked")
     private Record<GenericObject> createMockFooRecord(Foo record, Map<String, String> actionProperties,
                                                         CompletableFuture<Boolean> future) {
