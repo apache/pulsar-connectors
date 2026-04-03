@@ -132,15 +132,15 @@ public class JdbcSinkConfig implements Serializable {
 
     @FieldDoc(
             required = false,
-            defaultValue = "0",
+            defaultValue = "-1",
             help = "Maximum number of records to buffer in the internal queue before applying back-pressure. "
                     + "When the queue is full, incoming records will be failed (negatively acknowledged) so that "
                     + "the Pulsar consumer can redeliver them later. This prevents out-of-memory errors when the "
                     + "database connection is slow or broken. "
-                    + "A value of 0 (default) auto-sizes to batchSize * 10. "
-                    + "A value of -1 disables the limit (unbounded, legacy behavior)."
+                    + "A value of 0 auto-sizes to batchSize * 10. "
+                    + "A value of -1 (default) disables the limit (unbounded, legacy behavior)."
     )
-    private int maxQueueSize = 0;
+    private int maxQueueSize = -1;
 
     public enum InsertMode {
         INSERT,
@@ -166,6 +166,10 @@ public class JdbcSinkConfig implements Serializable {
     public void validate() {
         if (timeoutMs <= 0 && batchSize <= 0) {
             throw new IllegalArgumentException("timeoutMs or batchSize must be set to a positive value.");
+        }
+        if (maxQueueSize < -1) {
+            throw new IllegalArgumentException("maxQueueSize must be -1 (unbounded), 0 (auto-size), "
+                    + "or a positive value.");
         }
     }
 

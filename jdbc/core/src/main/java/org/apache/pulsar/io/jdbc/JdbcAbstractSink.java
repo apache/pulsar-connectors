@@ -121,10 +121,11 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
         batchSize = jdbcSinkConfig.getBatchSize();
         maxQueueSize = jdbcSinkConfig.getMaxQueueSize();
         if (maxQueueSize == 0) {
-            // Auto-size: default to 10x batch size
-            maxQueueSize = batchSize > 0 ? batchSize * 10 : 10000;
+            // Auto-size: default to 10x batch size (overflow-safe)
+            long calculated = batchSize > 0 ? (long) batchSize * 10L : 10000L;
+            maxQueueSize = calculated > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) calculated;
         }
-        // maxQueueSize < 0 (e.g. -1) means unbounded (legacy behavior)
+        // maxQueueSize < 0 (i.e. -1) means unbounded (legacy behavior)
         log.info("JDBC sink queue capacity: {}", maxQueueSize > 0 ? maxQueueSize : "unbounded");
         incomingList = new LinkedList<>();
         isFlushing = new AtomicBoolean(false);
@@ -210,19 +211,30 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
             record.fail();
             return;
         }
-        int number;
+        int number = 0;
+        boolean shouldFail = false;
+        boolean shouldLogQueueFull = false;
+        int queueSizeSnapshot = 0;
         synchronized (incomingList) {
             if (maxQueueSize > 0 && incomingList.size() >= maxQueueSize) {
                 if (!queueFullLogged) {
-                    log.warn("Internal queue is full ({} >= {}), failing records to apply back-pressure",
-                            incomingList.size(), maxQueueSize);
                     queueFullLogged = true;
+                    shouldLogQueueFull = true;
+                    queueSizeSnapshot = incomingList.size();
                 }
-                record.fail();
-                return;
+                shouldFail = true;
+            } else {
+                incomingList.add(record);
+                number = incomingList.size();
             }
-            incomingList.add(record);
-            number = incomingList.size();
+        }
+        if (shouldFail) {
+            if (shouldLogQueueFull) {
+                log.warn("Internal queue is full ({} >= {}), failing records to apply back-pressure",
+                        queueSizeSnapshot, maxQueueSize);
+            }
+            record.fail();
+            return;
         }
         if (batchSize > 0 && number >= batchSize) {
             if (log.isDebugEnabled()) {
@@ -273,22 +285,33 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
         if (state.get() == State.CLOSED) {
             return;
         }
-        if (incomingList.size() > 0 && isFlushing.compareAndSet(false, true)) {
-            boolean needAnotherRound;
-            final Deque<Record<T>> swapList = new LinkedList<>();
-
-            synchronized (incomingList) {
-                if (log.isDebugEnabled()) {
-                    log.debug("Starting flush, queue size: {}", incomingList.size());
+        if (!isFlushing.compareAndSet(false, true)) {
+            if (log.isDebugEnabled()) {
+                synchronized (incomingList) {
+                    log.debug("Already in flushing state, will not flush, queue size: {}", incomingList.size());
                 }
-                final int actualBatchSize = batchSize > 0 ? Math.min(incomingList.size(), batchSize) :
-                        incomingList.size();
-
-                for (int i = 0; i < actualBatchSize; i++) {
-                    swapList.add(incomingList.removeFirst());
-                }
-                needAnotherRound = batchSize > 0 && !incomingList.isEmpty() && incomingList.size() >= batchSize;
             }
+            return;
+        }
+        boolean needAnotherRound;
+        final Deque<Record<T>> swapList = new LinkedList<>();
+
+        synchronized (incomingList) {
+            if (incomingList.isEmpty()) {
+                isFlushing.set(false);
+                return;
+            }
+            if (log.isDebugEnabled()) {
+                log.debug("Starting flush, queue size: {}", incomingList.size());
+            }
+            final int actualBatchSize = batchSize > 0 ? Math.min(incomingList.size(), batchSize) :
+                    incomingList.size();
+
+            for (int i = 0; i < actualBatchSize; i++) {
+                swapList.add(incomingList.removeFirst());
+            }
+            needAnotherRound = batchSize > 0 && !incomingList.isEmpty() && incomingList.size() >= batchSize;
+        }
             long start = System.nanoTime();
 
             int count = 0;
@@ -366,11 +389,6 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
             if (needAnotherRound) {
                 flush();
             }
-        } else {
-            if (log.isDebugEnabled()) {
-                log.debug("Already in flushing state, will not flush, queue size: {}", incomingList.size());
-            }
-        }
     }
 
     private void ensureConnection() throws Exception {

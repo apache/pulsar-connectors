@@ -1024,6 +1024,25 @@ public class SqliteJdbcSinkTest {
         }
     }
 
+    @Test(expectedExceptions = IllegalArgumentException.class,
+          expectedExceptionsMessageRegExp = ".*maxQueueSize.*")
+    public void testInvalidMaxQueueSizeRejected() throws Exception {
+        jdbcSink.close();
+        jdbcSink = null;
+
+        Map<String, Object> conf = Maps.newHashMap();
+        conf.put("jdbcUrl", sqliteUtils.sqliteUri());
+        conf.put("tableName", tableName);
+        conf.put("key", "field3");
+        conf.put("nonKey", "field1,field2");
+        conf.put("batchSize", 200);
+        conf.put("timeoutMs", 500);
+        conf.put("maxQueueSize", -2);
+
+        SqliteJdbcAutoSchemaSink sink = new SqliteJdbcAutoSchemaSink();
+        sink.open(conf, null);
+    }
+
     /**
      * Test that ensureConnection() reconnects when the existing connection becomes invalid.
      * Simulates a database going away and coming back by closing the connection mid-flight,
