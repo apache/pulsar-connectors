@@ -164,6 +164,35 @@ public class FileListingThreadTest extends AbstractFileTest {
     }
 
     @Test
+    public void pollingIntervalTest() throws IOException {
+        int pollingInterval = 100;
+        int tolerance = 20;
+
+        Map<String, Object> map = new HashMap<>();
+        map.put("inputDirectory", directory.toString());
+        map.put("pollingInterval", pollingInterval);
+
+        try {
+            listingThread = new FileListingThread(FileSourceConfig.load(map), workQueue, inProcess, recentlyProcessed);
+            executor.execute(listingThread);
+
+            generateFiles(1);
+            Thread.sleep(pollingInterval + tolerance);
+
+            verify(workQueue, times(1)).offer(any(File.class));
+
+            generateFiles(1);
+            Thread.sleep(pollingInterval + tolerance);
+
+            verify(workQueue, times(2)).offer(any(File.class));
+        } catch (InterruptedException | ExecutionException e) {
+            fail("Unable to generate files" + e.getLocalizedMessage());
+        } finally {
+            cleanUp();
+        }
+    }
+
+    @Test
     public final void doRecurseTest() throws IOException {
 
         Map<String, Object> map = new HashMap<String, Object> ();

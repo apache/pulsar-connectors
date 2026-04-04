@@ -70,7 +70,7 @@ public class FileListingThread extends Thread {
 
     public void run() {
         while (true) {
-            if ((queueLastUpdated.get() < System.currentTimeMillis() - pollingInterval) && listingLock.tryLock()) {
+            if ((queueLastUpdated.get() <= System.currentTimeMillis() - pollingInterval) && listingLock.tryLock()) {
                 try {
                     final File directory = new File(inputDir);
                     final Set<File> listing = performListing(directory, fileFilterRef.get(), recurseDirs);
@@ -97,7 +97,7 @@ public class FileListingThread extends Thread {
             }
 
             try {
-                sleep(pollingInterval - 1);
+                sleep(pollingInterval);
             } catch (InterruptedException e) {
                 // Just ignore
             }
