@@ -431,8 +431,8 @@ public class KafkaConnectSink implements Sink<GenericObject> {
         private String desanitizeTopicName(String kafkaName) {
             if (sanitizeTopicName) {
                 String pulsarTopicName = desanitizedTopicCache.getIfPresent(kafkaName);
-                if (KafkaConnectSink.log.isDebugEnabled()) {
-                    KafkaConnectSink.log.debug("desanitizedTopicCache got: kafkaName: {}, pulsarTopicName: {}",
+                if (log.isDebugEnabled()) {
+                    log.debug("desanitizedTopicCache got: kafkaName: {}, pulsarTopicName: {}",
                             kafkaName, pulsarTopicName);
                 }
                 return pulsarTopicName != null ? pulsarTopicName : kafkaName;
@@ -460,7 +460,7 @@ public class KafkaConnectSink implements Sink<GenericObject> {
                     return sanitizedName;
                 });
             } catch (ExecutionException e) {
-                KafkaConnectSink.log.error("Failed to get sanitized topic name for {}", name, e);
+                log.error("Failed to get sanitized topic name for {}", name, e);
                 throw new IllegalStateException("Failed to get sanitized topic name for " + name, e);
             }
         }
