@@ -252,6 +252,10 @@ public class KafkaConnectSink implements Sink<GenericObject> {
             ackUntil(lastNotFlushed, committedOffsets, Record::ack);
             log.info("Flush succeeded");
         } catch (Throwable t) {
+            if (committedOffsets == null) {
+                log.error("preCommit failed — retrying to preserve ordering", t);
+                return;
+            }
             log.error("error flushing pending records", t);
             ackUntil(lastNotFlushed, committedOffsets, Record::fail);
         } finally {
