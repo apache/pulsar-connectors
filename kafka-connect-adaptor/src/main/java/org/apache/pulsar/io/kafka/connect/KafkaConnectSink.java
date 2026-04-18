@@ -101,7 +101,7 @@ public class KafkaConnectSink implements Sink<GenericObject> {
     private int maxBatchBitsForOffset = 12;
     private boolean useIndexAsOffset = true;
 
-    private TopicPartitionResolver topicPartitionResolver;
+    TopicPartitionResolver topicPartitionResolver;
 
     @Override
     public void write(Record<GenericObject> sourceRecord) {
@@ -391,7 +391,7 @@ public class KafkaConnectSink implements Sink<GenericObject> {
         private final int partition;
     }
 
-    private static class TopicPartitionResolver {
+    static class TopicPartitionResolver {
         private final String topicName;
         private final boolean sanitizeTopicName;
         private final boolean collapsePartitionedTopics;
@@ -443,7 +443,7 @@ public class KafkaConnectSink implements Sink<GenericObject> {
 
         // Replace all non-letter, non-digit characters with underscore.
         // Append underscore in front of name if it does not begin with alphabet or underscore.
-        private String sanitizeNameIfNeeded(String name) {
+        String sanitizeNameIfNeeded(String name) {
             if (!sanitizeTopicName) {
                 return name;
             }
