@@ -98,16 +98,6 @@ public class KafkaConnectSink implements Sink<GenericObject> {
     // Thi is a workaround for https://github.com/apache/pulsar/issues/19922
     private boolean collapsePartitionedTopics = false;
 
-    private final Cache<String, String> sanitizedTopicCache =
-            CacheBuilder.newBuilder().maximumSize(1000)
-                    .expireAfterAccess(30, TimeUnit.MINUTES).build();
-
-    // Can't really safely expire these entries.  If we do, we could end up with
-    // a sanitized topic name that used in e.g. resume() after a long pause but can't be
-    // // re-resolved into a form usable for Pulsar.
-    private final Cache<String, String> desanitizedTopicCache =
-            CacheBuilder.newBuilder().build();
-
     private int maxBatchBitsForOffset = 12;
     private boolean useIndexAsOffset = true;
 
@@ -204,9 +194,7 @@ public class KafkaConnectSink implements Sink<GenericObject> {
         topicPartitionResolver = new TopicPartitionResolver(
                 topicName,
                 sanitizeTopicName,
-                collapsePartitionedTopics,
-                sanitizedTopicCache,
-                desanitizedTopicCache);
+                collapsePartitionedTopics);
 
         taskContext =
                 new PulsarKafkaSinkTaskContext(configs.get(0), ctx, task::open,
@@ -407,19 +395,22 @@ public class KafkaConnectSink implements Sink<GenericObject> {
         private final String topicName;
         private final boolean sanitizeTopicName;
         private final boolean collapsePartitionedTopics;
-        private final Cache<String, String> sanitizedTopicCache;
-        private final Cache<String, String> desanitizedTopicCache;
+        private final Cache<String, String> sanitizedTopicCache =
+                CacheBuilder.newBuilder().maximumSize(1000)
+                        .expireAfterAccess(30, TimeUnit.MINUTES).build();
+
+        // Can't really safely expire these entries.  If we do, we could end up with
+        // a sanitized topic name that used in e.g. resume() after a long pause but can't be
+        // // re-resolved into a form usable for Pulsar.
+        private final Cache<String, String> desanitizedTopicCache =
+                CacheBuilder.newBuilder().build();
 
         private TopicPartitionResolver(String topicName,
                                        boolean sanitizeTopicName,
-                                       boolean collapsePartitionedTopics,
-                                       Cache<String, String> sanitizedTopicCache,
-                                       Cache<String, String> desanitizedTopicCache) {
+                                       boolean collapsePartitionedTopics) {
             this.topicName = topicName;
             this.sanitizeTopicName = sanitizeTopicName;
             this.collapsePartitionedTopics = collapsePartitionedTopics;
-            this.sanitizedTopicCache = sanitizedTopicCache;
-            this.desanitizedTopicCache = desanitizedTopicCache;
         }
 
         private ResolvedTopicPartition resolve(Record<GenericObject> sourceRecord) {
