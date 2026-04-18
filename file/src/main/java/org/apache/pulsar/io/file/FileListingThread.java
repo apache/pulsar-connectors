@@ -35,11 +35,11 @@ import java.util.regex.Pattern;
 import org.apache.commons.lang3.StringUtils;
 
 /**
- * Worker thread that checks the configured input directory for
+ * Worker that checks the configured input directory for
  * files that meet the provided filtering criteria, and publishes
  * them to a work queue for processing by the FileConsumerThreads.
  */
-public class FileListingThread extends Thread {
+public class FileListingThread implements Runnable {
 
     private final AtomicLong queueLastUpdated = new AtomicLong(0L);
     private final Lock listingLock = new ReentrantLock();
@@ -68,6 +68,7 @@ public class FileListingThread extends Thread {
         fileFilterRef.set(createFileFilter(fileConfig));
     }
 
+    @Override
     public void run() {
         while (true) {
             if ((queueLastUpdated.get() <= System.currentTimeMillis() - pollingInterval) && listingLock.tryLock()) {
@@ -97,7 +98,7 @@ public class FileListingThread extends Thread {
             }
 
             try {
-                sleep(pollingInterval);
+                Thread.sleep(pollingInterval);
             } catch (InterruptedException e) {
                 // Just ignore
             }
