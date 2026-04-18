@@ -1734,7 +1734,7 @@ public class KafkaConnectSinkTest extends ProducerConsumerBase {
                 new OffsetAndMetadata(sink.getMessageOffset(record))
         );
 
-        // Trigger actUntil manually
+        // Trigger ackUntil manually
         sink.ackUntil(record, committedOffsets, Record::ack);
 
         // Assert that the ackFunction runnable of the record is called and pendingFlushQueue is empty
