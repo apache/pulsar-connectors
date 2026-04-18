@@ -39,7 +39,7 @@ import org.apache.commons.lang3.StringUtils;
  * files that meet the provided filtering criteria, and publishes
  * them to a work queue for processing by the FileConsumerThreads.
  */
-public class FileListingThread implements Runnable {
+public class FileListingTask implements Runnable {
 
     private final AtomicLong queueLastUpdated = new AtomicLong(0L);
     private final Lock listingLock = new ReentrantLock();
@@ -53,10 +53,10 @@ public class FileListingThread implements Runnable {
     private final boolean keepOriginal;
     private final long pollingInterval;
 
-    public FileListingThread(FileSourceConfig fileConfig,
-            BlockingQueue<File> workQueue,
-            BlockingQueue<File> inProcess,
-            BlockingQueue<File> recentlyProcessed) {
+    public FileListingTask(FileSourceConfig fileConfig,
+                           BlockingQueue<File> workQueue,
+                           BlockingQueue<File> inProcess,
+                           BlockingQueue<File> recentlyProcessed) {
         this.workQueue = workQueue;
         this.inProcess = inProcess;
         this.recentlyProcessed = recentlyProcessed;

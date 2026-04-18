@@ -30,7 +30,7 @@ import java.util.concurrent.ExecutionException;
 import org.testng.annotations.Test;
 
 
-public class FileListingThreadTest extends AbstractFileTest {
+public class FileListingTaskTest extends AbstractFileTest {
 
     @Test
     public final void singleFileTest() throws IOException {
@@ -40,8 +40,8 @@ public class FileListingThreadTest extends AbstractFileTest {
 
         try {
             generateFiles(1);
-            listingThread = new FileListingThread(FileSourceConfig.load(map), workQueue, inProcess, recentlyProcessed);
-            executor.execute(listingThread);
+            listingTask = new FileListingTask(FileSourceConfig.load(map), workQueue, inProcess, recentlyProcessed);
+            executor.execute(listingTask);
             Thread.sleep(2000);
             verify(producedFiles, times(1)).put(any(File.class));
             verify(workQueue, times(1)).offer(any(File.class));
@@ -63,8 +63,8 @@ public class FileListingThreadTest extends AbstractFileTest {
 
         try {
             generateFiles(50);
-            listingThread = new FileListingThread(FileSourceConfig.load(map), workQueue, inProcess, recentlyProcessed);
-            executor.execute(listingThread);
+            listingTask = new FileListingTask(FileSourceConfig.load(map), workQueue, inProcess, recentlyProcessed);
+            executor.execute(listingTask);
             Thread.sleep(2000);
             verify(workQueue, times(50)).offer(any(File.class));
 
@@ -86,8 +86,8 @@ public class FileListingThreadTest extends AbstractFileTest {
         try {
             // Create 50 zero size files
             generateFiles(50, 0);
-            listingThread = new FileListingThread(FileSourceConfig.load(map), workQueue, inProcess, recentlyProcessed);
-            executor.execute(listingThread);
+            listingTask = new FileListingTask(FileSourceConfig.load(map), workQueue, inProcess, recentlyProcessed);
+            executor.execute(listingTask);
             Thread.sleep(2000);
             verify(workQueue, times(0)).offer(any(File.class));
         } catch (InterruptedException | ExecutionException e) {
@@ -106,8 +106,8 @@ public class FileListingThreadTest extends AbstractFileTest {
             // Create 5 files that exceed the limit and 45 that don't
             generateFiles(5, 1000);
             generateFiles(45, 10);
-            listingThread = new FileListingThread(FileSourceConfig.load(map), workQueue, inProcess, recentlyProcessed);
-            executor.execute(listingThread);
+            listingTask = new FileListingTask(FileSourceConfig.load(map), workQueue, inProcess, recentlyProcessed);
+            executor.execute(listingTask);
             Thread.sleep(2000);
             verify(workQueue, times(45)).offer(any(File.class));
         } catch (InterruptedException | ExecutionException e) {
@@ -127,8 +127,8 @@ public class FileListingThreadTest extends AbstractFileTest {
         try {
             // Create 5 files that will be too "new" for processing
             generateFiles(5);
-            listingThread = new FileListingThread(FileSourceConfig.load(map), workQueue, inProcess, recentlyProcessed);
-            executor.execute(listingThread);
+            listingTask = new FileListingTask(FileSourceConfig.load(map), workQueue, inProcess, recentlyProcessed);
+            executor.execute(listingTask);
             Thread.sleep(2000);
             verify(workQueue, times(0)).offer(any(File.class));
         } catch (InterruptedException | ExecutionException e) {
@@ -152,8 +152,8 @@ public class FileListingThreadTest extends AbstractFileTest {
 
             // Create 5 files that will be too "old" for processing
             generateFiles(5);
-            listingThread = new FileListingThread(FileSourceConfig.load(map), workQueue, inProcess, recentlyProcessed);
-            executor.execute(listingThread);
+            listingTask = new FileListingTask(FileSourceConfig.load(map), workQueue, inProcess, recentlyProcessed);
+            executor.execute(listingTask);
             Thread.sleep(2000);
             verify(workQueue, times(5)).offer(any(File.class));
         } catch (InterruptedException | ExecutionException e) {
@@ -173,8 +173,8 @@ public class FileListingThreadTest extends AbstractFileTest {
         map.put("pollingInterval", pollingInterval);
 
         try {
-            listingThread = new FileListingThread(FileSourceConfig.load(map), workQueue, inProcess, recentlyProcessed);
-            executor.execute(listingThread);
+            listingTask = new FileListingTask(FileSourceConfig.load(map), workQueue, inProcess, recentlyProcessed);
+            executor.execute(listingTask);
 
             generateFiles(1);
             Thread.sleep(pollingInterval + tolerance);
@@ -205,8 +205,8 @@ public class FileListingThreadTest extends AbstractFileTest {
 
             // Create 5 files in a sub-folder
             generateFiles(5, 1, directory.toString() + File.separator + "sub-dir");
-            listingThread = new FileListingThread(FileSourceConfig.load(map), workQueue, inProcess, recentlyProcessed);
-            executor.execute(listingThread);
+            listingTask = new FileListingTask(FileSourceConfig.load(map), workQueue, inProcess, recentlyProcessed);
+            executor.execute(listingTask);
             Thread.sleep(2000);
             verify(workQueue, times(10)).offer(any(File.class));
         } catch (InterruptedException | ExecutionException e) {
@@ -229,8 +229,8 @@ public class FileListingThreadTest extends AbstractFileTest {
 
             // Create 5 files in a sub-folder
             generateFiles(5, 1, directory.toString() + File.separator + "sub-dir");
-            listingThread = new FileListingThread(FileSourceConfig.load(map), workQueue, inProcess, recentlyProcessed);
-            executor.execute(listingThread);
+            listingTask = new FileListingTask(FileSourceConfig.load(map), workQueue, inProcess, recentlyProcessed);
+            executor.execute(listingTask);
             Thread.sleep(2000);
             verify(workQueue, times(5)).offer(any(File.class));
         } catch (InterruptedException | ExecutionException e) {
@@ -252,8 +252,8 @@ public class FileListingThreadTest extends AbstractFileTest {
             // Create 5 files in a sub-folder
             generateFiles(5, 1, directory.toString() + File.separator + "sub-dir-a");
             generateFiles(5, 1, directory.toString() + File.separator + "dir-b");
-            listingThread = new FileListingThread(FileSourceConfig.load(map), workQueue, inProcess, recentlyProcessed);
-            executor.execute(listingThread);
+            listingTask = new FileListingTask(FileSourceConfig.load(map), workQueue, inProcess, recentlyProcessed);
+            executor.execute(listingTask);
             Thread.sleep(2000);
             verify(workQueue, times(5)).offer(any(File.class));
         } catch (InterruptedException | ExecutionException e) {
@@ -275,8 +275,8 @@ public class FileListingThreadTest extends AbstractFileTest {
         try {
             generateFiles(5, 1, directory.toString(), ".txt");
             generateFiles(1, 1, directory.toString(), processedFileSuffix);
-            listingThread = new FileListingThread(FileSourceConfig.load(map), workQueue, inProcess, recentlyProcessed);
-            executor.execute(listingThread);
+            listingTask = new FileListingTask(FileSourceConfig.load(map), workQueue, inProcess, recentlyProcessed);
+            executor.execute(listingTask);
             Thread.sleep(2000);
             verify(workQueue, times(5)).offer(any(File.class));
         } catch (InterruptedException | ExecutionException e) {
@@ -298,8 +298,8 @@ public class FileListingThreadTest extends AbstractFileTest {
         try {
             generateFiles(5, 1, directory.toString(), ".txt");
             generateFiles(1, 1, directory.toString(), processedFileSuffix);
-            listingThread = new FileListingThread(FileSourceConfig.load(map), workQueue, inProcess, recentlyProcessed);
-            executor.execute(listingThread);
+            listingTask = new FileListingTask(FileSourceConfig.load(map), workQueue, inProcess, recentlyProcessed);
+            executor.execute(listingTask);
             Thread.sleep(2000);
             verify(workQueue, times(6)).offer(any(File.class));
         } catch (InterruptedException | ExecutionException e) {

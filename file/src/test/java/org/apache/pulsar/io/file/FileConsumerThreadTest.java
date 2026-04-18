@@ -50,9 +50,9 @@ public class FileConsumerThreadTest extends AbstractFileTest {
 
         try {
             generateFiles(1);
-            listingThread = new FileListingThread(FileSourceConfig.load(map), workQueue, inProcess, recentlyProcessed);
+            listingTask = new FileListingTask(FileSourceConfig.load(map), workQueue, inProcess, recentlyProcessed);
             consumerThread = new FileConsumerThread(consumer, workQueue, inProcess, recentlyProcessed);
-            executor.execute(listingThread);
+            executor.execute(listingTask);
             executor.execute(consumerThread);
             Thread.sleep(2000);
 
@@ -85,9 +85,9 @@ public class FileConsumerThreadTest extends AbstractFileTest {
 
         try {
             generateFiles(50, 2);
-            listingThread = new FileListingThread(FileSourceConfig.load(map), workQueue, inProcess, recentlyProcessed);
+            listingTask = new FileListingTask(FileSourceConfig.load(map), workQueue, inProcess, recentlyProcessed);
             consumerThread = new FileConsumerThread(consumer, workQueue, inProcess, recentlyProcessed);
-            executor.execute(listingThread);
+            executor.execute(listingTask);
             executor.execute(consumerThread);
             Thread.sleep(2000);
 
@@ -120,9 +120,9 @@ public class FileConsumerThreadTest extends AbstractFileTest {
 
         try {
             generateFiles(1, 10);
-            listingThread = new FileListingThread(FileSourceConfig.load(map), workQueue, inProcess, recentlyProcessed);
+            listingTask = new FileListingTask(FileSourceConfig.load(map), workQueue, inProcess, recentlyProcessed);
             consumerThread = new FileConsumerThread(consumer, workQueue, inProcess, recentlyProcessed);
-            executor.execute(listingThread);
+            executor.execute(listingTask);
             executor.execute(consumerThread);
             Thread.sleep(2000);
 
