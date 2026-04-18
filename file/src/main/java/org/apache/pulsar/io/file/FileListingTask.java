@@ -70,7 +70,7 @@ public class FileListingTask implements Runnable {
 
     @Override
     public void run() {
-        while (true) {
+        while (!Thread.currentThread().isInterrupted()) {
             if ((queueLastUpdated.get() <= System.currentTimeMillis() - pollingInterval) && listingLock.tryLock()) {
                 try {
                     final File directory = new File(inputDir);
@@ -100,7 +100,8 @@ public class FileListingTask implements Runnable {
             try {
                 Thread.sleep(pollingInterval);
             } catch (InterruptedException e) {
-                // Just ignore
+                Thread.currentThread().interrupt();
+                break;
             }
         }
     }
