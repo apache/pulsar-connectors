@@ -344,7 +344,7 @@ public class KafkaConnectSinkTest extends ProducerConsumerBase {
 
         assertEquals(status.get(), 1);
 
-        final TopicPartition tp = new TopicPartition(sink.topicPartitionResolver
+        final TopicPartition tp = new TopicPartition(sink.getTopicPartitionResolver()
                 .sanitizeNameIfNeeded(pulsarTopicName), 0);
         assertNotEquals(FunctionCommon.getSequenceId(msgId), 0);
         assertEquals(sink.currentOffset(tp.topic(), tp.partition()), FunctionCommon.getSequenceId(msgId));

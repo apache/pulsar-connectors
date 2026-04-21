@@ -101,7 +101,7 @@ public class KafkaConnectSink implements Sink<GenericObject> {
     private int maxBatchBitsForOffset = 12;
     private boolean useIndexAsOffset = true;
 
-    TopicPartitionResolver topicPartitionResolver;
+    private TopicPartitionResolver topicPartitionResolver;
 
     @Override
     public void write(Record<GenericObject> sourceRecord) {
@@ -380,6 +380,11 @@ public class KafkaConnectSink implements Sink<GenericObject> {
                 .orElse(-1L);
     }
 
+    @VisibleForTesting
+    TopicPartitionResolver getTopicPartitionResolver() {
+        return topicPartitionResolver;
+    }
+
     @Getter
     @AllArgsConstructor
     static class BatchMessageSequenceRef {
@@ -404,8 +409,8 @@ public class KafkaConnectSink implements Sink<GenericObject> {
                         .expireAfterAccess(30, TimeUnit.MINUTES).build();
 
         // Can't really safely expire these entries.  If we do, we could end up with
-        // a sanitized topic name that used in e.g. resume() after a long pause but can't be
-        // // re-resolved into a form usable for Pulsar.
+        // a sanitized topic name that is used in e.g. resume() after a long pause but can't be
+        // re-resolved into a form usable for Pulsar.
         private final Cache<String, String> desanitizedTopicCache =
                 CacheBuilder.newBuilder().build();
 
