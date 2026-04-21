@@ -344,7 +344,8 @@ public class KafkaConnectSinkTest extends ProducerConsumerBase {
 
         assertEquals(status.get(), 1);
 
-        final TopicPartition tp = new TopicPartition(sink.sanitizeNameIfNeeded(pulsarTopicName, true), 0);
+        final TopicPartition tp = new TopicPartition(sink.getTopicPartitionResolver()
+                .sanitizeNameIfNeeded(pulsarTopicName), 0);
         assertNotEquals(FunctionCommon.getSequenceId(msgId), 0);
         assertEquals(sink.currentOffset(tp.topic(), tp.partition()), FunctionCommon.getSequenceId(msgId));
 
@@ -1574,7 +1575,7 @@ public class KafkaConnectSinkTest extends ProducerConsumerBase {
         assertNull(ref);
 
         ref = KafkaConnectSink.getMessageSequenceRefForBatchMessage(
-                        new TopicMessageIdImpl("topic-0", new MessageIdImpl(ledgerId, entryId, 0))
+                new TopicMessageIdImpl("topic-0", new MessageIdImpl(ledgerId, entryId, 0))
         );
         assertNull(ref);
 
@@ -1648,7 +1649,7 @@ public class KafkaConnectSinkTest extends ProducerConsumerBase {
         props.put("collapsePartitionedTopics", Boolean.toString(isEnabled));
 
         KafkaConnectSink sink = new KafkaConnectSink();
-            sink.open(props, context);
+        sink.open(props, context);
 
         AvroSchema<PulsarSchemaToKafkaSchemaTest.StructWithAnnotations> pulsarAvroSchema =
                 AvroSchema.of(PulsarSchemaToKafkaSchemaTest.StructWithAnnotations.class);
@@ -1678,6 +1679,67 @@ public class KafkaConnectSinkTest extends ProducerConsumerBase {
 
         Assert.assertEquals(sinkRecord.topic(), expectedKafkaTopic);
         Assert.assertEquals(sinkRecord.kafkaPartition(), expectedPartition);
+
+        sink.close();
+    }
+
+    @Test
+    public void testAckUntilWithCollapsePartitionedTopics() throws Exception {
+        testAckUntil(true,
+                "persistent://a/b/fake-topic-partition-0",
+                "persistent://a/b/fake-topic",
+                0);
+    }
+
+    @Test
+    public void testAckUntilWithoutCollapsePartitionedTopics() throws Exception {
+        // Note: Without collapsePartitionedTopics expectedPartition in the committedOffsets will always be 0
+        testAckUntil(false,
+                "persistent://a/b/fake-topic-partition-1",
+                "persistent://a/b/fake-topic-partition-1",
+                0);
+    }
+
+    private void testAckUntil(boolean collapseEnabled,
+                              String pulsarTopic,
+                              String expectedKafkaTopic,
+                              int expectedPartition) throws Exception {
+        // Setup sink with given collapseEnabled value
+        props.put("kafkaConnectorSinkClass", SchemaedFileStreamSinkConnector.class.getCanonicalName());
+        props.put("collapsePartitionedTopics", Boolean.toString(collapseEnabled));
+        KafkaConnectSink sink = new KafkaConnectSink();
+        sink.open(props, context);
+
+        // Create pulsar record with given pulsarTopic and expectedPartition
+        Message msg = mock(MessageImpl.class);
+        when(msg.getMessageId()).thenReturn(new MessageIdImpl(1, 1, expectedPartition));
+        when(msg.getValue()).thenReturn(null);
+
+        AtomicInteger ackCount = new AtomicInteger(0);
+
+        Record<GenericObject> record = PulsarRecord.<GenericObject>builder()
+                .topicName(pulsarTopic)
+                .message(msg)
+                .ackFunction(ackCount::incrementAndGet)
+                .failFunction(() -> {})
+                .build();
+
+        // Add the pulsar record to pendingFlushQueue
+        sink.pendingFlushQueue.add(record);
+
+        // Build committedOffsets with the given expectedKafkaTopic and expectedPartition
+        Map<TopicPartition, OffsetAndMetadata> committedOffsets = new HashMap<>();
+        committedOffsets.put(
+                new TopicPartition(expectedKafkaTopic, expectedPartition),
+                new OffsetAndMetadata(sink.getMessageOffset(record))
+        );
+
+        // Trigger ackUntil manually
+        sink.ackUntil(record, committedOffsets, Record::ack);
+
+        // Assert that the ackFunction runnable of the record is called and pendingFlushQueue is empty
+        Assert.assertEquals(ackCount.get(), 1);
+        Assert.assertTrue(sink.pendingFlushQueue.isEmpty());
 
         sink.close();
     }
