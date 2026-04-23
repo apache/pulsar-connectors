@@ -42,7 +42,7 @@ import org.apache.solr.common.SolrInputDocument;
 @Slf4j
 public abstract class SolrAbstractSink<T> implements Sink<T> {
 
-    private SolrSinkConfig solrSinkConfig;
+    protected SolrSinkConfig solrSinkConfig;
     private SolrClient client;
     private boolean enableBasicAuth;
 
@@ -78,6 +78,11 @@ public abstract class SolrAbstractSink<T> implements Sink<T> {
         }
 
         SolrInputDocument document = convert(record);
+        if (document == null) {
+            log.error("Failed to convert record: {}", record);
+            record.ack();
+            return;
+        }
         updateRequest.add(document);
 
         try {
@@ -102,6 +107,10 @@ public abstract class SolrAbstractSink<T> implements Sink<T> {
 
     // convert record as a Solr document
     public abstract SolrInputDocument convert(Record<T> message);
+
+    protected SolrClient getSolrClient() {
+        return client;
+    }
 
     public static SolrClient getClient(SolrMode solrMode, String url) {
         SolrClient solrClient = null;

@@ -81,6 +81,13 @@ public class SolrSinkConfig implements Serializable {
         help = "The password to use for basic authentication")
     private String password;
 
+    @FieldDoc(
+            required = false,
+            defaultValue = "false",
+            help = "If true, the sink will attempt to extract the nested 'after' field from CDC/Debezium records."
+    )
+    private boolean unwrapDebeziumRecord = false;
+
     public static SolrSinkConfig load(String yamlFile) throws IOException {
         ObjectMapper mapper = new ObjectMapper(new YAMLFactory());
         return mapper.readValue(new File(yamlFile), SolrSinkConfig.class);
