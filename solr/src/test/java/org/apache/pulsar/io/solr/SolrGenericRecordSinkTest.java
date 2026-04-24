@@ -51,6 +51,8 @@ public class SolrGenericRecordSinkTest {
 
     private SolrServerUtil solrServerUtil;
     private Message<GenericRecord> message;
+    private SolrGenericRecordSink sink;
+    private Map<String, Object> configs;
 
     /**
      * A Simple class to test solr class.
@@ -65,6 +67,14 @@ public class SolrGenericRecordSinkTest {
     public void setUp() throws Exception {
         solrServerUtil = new SolrServerUtil(8983);
         solrServerUtil.startStandaloneSolr();
+        sink = new SolrGenericRecordSink();
+        configs = new HashMap<>();
+        configs.put("solrUrl", "http://localhost:8983/solr");
+        configs.put("solrMode", "Standalone");
+        configs.put("solrCollection", "techproducts");
+        configs.put("solrCommitWithinMs", "100");
+        configs.put("username", "");
+        configs.put("password", "");
     }
 
     @AfterMethod(alwaysRun = true)
@@ -75,13 +85,6 @@ public class SolrGenericRecordSinkTest {
     @Test
     public void testOpenAndWriteSink() throws Exception {
         message = mock(MessageImpl.class);
-        Map<String, Object> configs = new HashMap<>();
-        configs.put("solrUrl", "http://localhost:8983/solr");
-        configs.put("solrMode", "Standalone");
-        configs.put("solrCollection", "techproducts");
-        configs.put("solrCommitWithinMs", "100");
-        configs.put("username", "");
-        configs.put("password", "");
         GenericSchema<GenericRecord> genericAvroSchema;
 
         SolrGenericRecordSink sink = new SolrGenericRecordSink();
@@ -118,14 +121,6 @@ public class SolrGenericRecordSinkTest {
     @Test
     @SuppressWarnings("unchecked")
     public void testDebeziumUnwrapEnvelope() throws Exception {
-        SolrGenericRecordSink sink = new SolrGenericRecordSink();
-        Map<String, Object> configs = new HashMap<>();
-        configs.put("solrUrl", "http://localhost:8983/solr");
-        configs.put("solrMode", "Standalone");
-        configs.put("solrCollection", "techproducts");
-        configs.put("solrCommitWithinMs", "100");
-        configs.put("username", "");
-        configs.put("password", "");
         configs.put("unwrapDebeziumRecord", true);
         sink.open(configs, null);
 
@@ -136,12 +131,12 @@ public class SolrGenericRecordSinkTest {
 
         GenericRecord mockValueRecord = mock(GenericRecord.class);
         when(mockRootRecord.getNativeObject()).thenReturn(new KeyValue<>("key", mockValueRecord));
-        // containsAfterField() iterates getFields() — must include "after" field here
+        // containsAfterField() iterates getFields() - must include "after" field here
         Field afterSchemaField = mock(Field.class);
         when(afterSchemaField.getName()).thenReturn("after");
         when(mockValueRecord.getFields()).thenReturn(Arrays.asList(afterSchemaField));
 
-        // extractAfterRecord() calls getField("after") by string — return nested record
+        // extractAfterRecord() calls getField("after") by string - return nested record
         GenericRecord mockAfterRecord = mock(GenericRecord.class);
         when(mockValueRecord.getField("after")).thenReturn(mockAfterRecord);
 
@@ -164,14 +159,6 @@ public class SolrGenericRecordSinkTest {
     @Test
     @SuppressWarnings("unchecked")
     public void testDebeziumUnwrapFlatValue() throws Exception {
-        SolrGenericRecordSink sink = new SolrGenericRecordSink();
-        Map<String, Object> configs = new HashMap<>();
-        configs.put("solrUrl", "http://localhost:8983/solr");
-        configs.put("solrMode", "Standalone");
-        configs.put("solrCollection", "techproducts");
-        configs.put("solrCommitWithinMs", "100");
-        configs.put("username", "");
-        configs.put("password", "");
         configs.put("unwrapDebeziumRecord", true);
         sink.open(configs, null);
 
@@ -183,7 +170,7 @@ public class SolrGenericRecordSinkTest {
         GenericRecord mockValueRecord = mock(GenericRecord.class);
         when(mockRootRecord.getNativeObject()).thenReturn(new KeyValue<>("key", mockValueRecord));
 
-        // containsAfterField() will iterate these — no "after" field, so flat path is taken
+        // containsAfterField() will iterate these, no "after" field, so flat path is taken
         Field idField = mock(Field.class);
         when(idField.getName()).thenReturn("id");
         Field profileIdField = mock(Field.class);

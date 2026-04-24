@@ -47,13 +47,8 @@ public class SolrGenericRecordSink extends SolrAbstractSink<GenericRecord> {
             return mapDebeziumPayload(messageValue, solrDocument);
         }
 
-        // Default mapping for non-CDC messages
-        for (Field recordField : messageValue.getFields()) {
-            Object fieldValue = messageValue.getField(recordField);
-            if (fieldValue != null) {
-                solrDocument.setField(recordField.getName(), fieldValue);
-            }
-        }
+        // Default mapping for non-CDC messages now uses the same safe population logic
+        populateSolrFields(messageValue, solrDocument);
         return solrDocument;
     }
 
@@ -64,14 +59,14 @@ public class SolrGenericRecordSink extends SolrAbstractSink<GenericRecord> {
             if (containsAfterField(payloadRecord)) {
                 payloadRecord = extractAfterRecord(payloadRecord, solrDocument);
                 if (payloadRecord == null) {
-                    return solrDocument;
+                    return null;
                 }
             }
             populateSolrFields(payloadRecord, solrDocument);
             return solrDocument;
         } catch (Exception ex) {
             log.error("Debezium record processing failed, returning empty Solr document", ex);
-            return solrDocument;
+            return null;
         }
     }
 
@@ -98,36 +93,48 @@ public class SolrGenericRecordSink extends SolrAbstractSink<GenericRecord> {
 
     private GenericRecord extractAfterRecord(GenericRecord envelopeRecord, SolrInputDocument solrDocument) {
         Object afterField = envelopeRecord.getField("after");
+
         if (afterField == null) {
-            log.info("Debezium DELETE event detected, Processing deletion");
+            log.debug("Debezium DELETE event detected, Processing deletion");
 
             Object beforeField = envelopeRecord.getField("before");
             if (beforeField instanceof GenericRecord) {
                 GenericRecord beforeRecord = (GenericRecord) beforeField;
-                Object id = beforeRecord.getField("id");
 
-                if (id != null) {
-                    try {
-                        int commitWithinMs = (solrSinkConfig != null && solrSinkConfig.getSolrCommitWithinMs() > 0)
-                                ? solrSinkConfig.getSolrCommitWithinMs() : 1000;
-                        getSolrClient().deleteById(String.valueOf(id), commitWithinMs);
-                        log.info("Successfully issued delete to Solr for id={} with commitWithinMs={}",
-                                id, commitWithinMs);
-                    } catch (Exception e) {
-                        log.error("Failed to delete document from Solr for id={}", id, e);
+                // Dynamically extract the primary key
+                List<Field> fields = beforeRecord.getFields();
+                if (!fields.isEmpty()) {
+                    Object id = beforeRecord.getField(fields.get(0));
+
+                    if (id != null) {
+                        try {
+                            int commitWithinMs = (solrSinkConfig != null && solrSinkConfig.getSolrCommitWithinMs() > 0)
+                                    ? solrSinkConfig.getSolrCommitWithinMs() : 1000;
+
+                            getSolrClient().deleteById(String.valueOf(id), commitWithinMs);
+                            log.debug("Successfully issued delete to Solr for id={} with commitWithinMs={}",
+                                    id, commitWithinMs);
+                        } catch (Exception e) {
+                            log.error("Failed to delete document from Solr for id={}", id, e);
+                        }
+                    } else {
+                        log.warn("DELETE event received, but primary key field was null.");
                     }
                 } else {
-                    log.warn("DELETE event received, but 'id' field was missing or null in the 'before' record.");
+                    log.warn("DELETE event received, but 'before' record had no fields.");
                 }
             } else {
                 log.warn("DELETE event received, but 'before' field is not a GenericRecord.");
             }
+
             return null;
         }
+
         if (afterField instanceof GenericRecord) {
             log.debug("Debezium envelope detected, extracting 'after' payload");
             return (GenericRecord) afterField;
         }
+
         return envelopeRecord;
     }
 
