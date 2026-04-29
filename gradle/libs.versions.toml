@@ -258,7 +258,9 @@ curator-recipes = { module = "org.apache.curator:curator-recipes", version.ref =
 conscrypt-openjdk-uber = { module = "org.conscrypt:conscrypt-openjdk-uber", version.ref = "conscrypt" }
 # Jetty
 jetty-bom = { module = "org.eclipse.jetty:jetty-bom", version.ref = "jetty" }
-jetty9-bom = { module = "org.eclipse.jetty:jetty-bom", version.ref = "jetty9" }
+# Override for alluxio: alluxio requires the older jetty 9.x. Aliases ending in
+# `-override` are NOT added to the shared `pulsar-connectors-dependencies` platform
+jetty9-bom-override = { module = "org.eclipse.jetty:jetty-bom", version.ref = "jetty9" }
 jetty-server = { module = "org.eclipse.jetty:jetty-server" }
 jetty-util = { module = "org.eclipse.jetty:jetty-util" }
 jetty-alpn-conscrypt-server = { module = "org.eclipse.jetty:jetty-alpn-conscrypt-server" }
