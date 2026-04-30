@@ -77,13 +77,19 @@ public abstract class SolrAbstractSink<T> implements Sink<T> {
             );
         }
 
-        SolrInputDocument document = convert(record);
-        if (document == null) {
-            log.error("Failed to convert record: {}", record);
-            record.ack();
+        try {
+            SolrInputDocument document = convert(record);
+            if (document == null) {
+                // It was a DELETE event or a skip, Acknowledge it so it isn't retried
+                record.ack();
+                return;
+            }
+            updateRequest.add(document);
+        } catch (Exception e) {
+            log.error("Failed to convert record: {}", record, e);
+            record.fail();
             return;
         }
-        updateRequest.add(document);
 
         try {
             UpdateResponse updateResponse = updateRequest.process(client, solrSinkConfig.getSolrCollection());

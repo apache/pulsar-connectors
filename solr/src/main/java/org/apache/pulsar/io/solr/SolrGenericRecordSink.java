@@ -56,7 +56,7 @@ public class SolrGenericRecordSink extends SolrAbstractSink<GenericRecord> {
         try {
             GenericRecord payloadRecord = extractValueRecord(rootRecord);
 
-            if (containsAfterField(payloadRecord)) {
+            if (isDebeziumEnvelope(payloadRecord)) {
                 payloadRecord = extractAfterRecord(payloadRecord, solrDocument);
                 if (payloadRecord == null) {
                     return null;
@@ -65,8 +65,8 @@ public class SolrGenericRecordSink extends SolrAbstractSink<GenericRecord> {
             populateSolrFields(payloadRecord, solrDocument);
             return solrDocument;
         } catch (Exception ex) {
-            log.error("Debezium record processing failed, returning empty Solr document", ex);
-            return null;
+            log.error("Debezium record processing failed", ex);
+            throw new RuntimeException("Failed to extract Debezium payload", ex);
         }
     }
 
@@ -82,13 +82,27 @@ public class SolrGenericRecordSink extends SolrAbstractSink<GenericRecord> {
         return rootRecord;
     }
 
-    private boolean containsAfterField(GenericRecord record) {
+    /**
+     * Identifies if the record is a Debezium CDC envelope.
+     * Debezium envelopes signify state changes and contain specific metadata fields.
+     * The "after" field signifies the newest state of the database row after an insert/update.
+     * We check for the presence of standard CDC fields to differentiate a true envelope
+     * from a normal database table that simply happens to have a column named "after".
+     */
+    private boolean isDebeziumEnvelope(GenericRecord record) {
+        boolean hasAfter = false;
+        boolean hasBefore = false;
+        boolean hasOp = false;
+
         for (Field field : record.getFields()) {
-            if ("after".equals(field.getName())) {
-                return true;
-            }
+            String fieldName = field.getName();
+            if ("after".equals(fieldName)) hasAfter = true;
+            else if ("before".equals(fieldName)) hasBefore = true;
+            else if ("op".equals(fieldName)) hasOp = true;
         }
-        return false;
+
+        // A CDC envelope will contain these Debezium operational fields
+        return (hasAfter || hasBefore) && hasOp;
     }
 
     private GenericRecord extractAfterRecord(GenericRecord envelopeRecord, SolrInputDocument solrDocument) {

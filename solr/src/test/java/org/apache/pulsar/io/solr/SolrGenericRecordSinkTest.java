@@ -134,7 +134,9 @@ public class SolrGenericRecordSinkTest {
         // containsAfterField() iterates getFields() - must include "after" field here
         Field afterSchemaField = mock(Field.class);
         when(afterSchemaField.getName()).thenReturn("after");
-        when(mockValueRecord.getFields()).thenReturn(Arrays.asList(afterSchemaField));
+        Field opField = mock(Field.class);
+        when(opField.getName()).thenReturn("op");
+        when(mockValueRecord.getFields()).thenReturn(Arrays.asList(afterSchemaField, opField));
 
         // extractAfterRecord() calls getField("after") by string - return nested record
         GenericRecord mockAfterRecord = mock(GenericRecord.class);
