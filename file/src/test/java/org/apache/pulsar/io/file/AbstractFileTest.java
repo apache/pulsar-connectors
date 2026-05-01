@@ -49,7 +49,7 @@ public abstract class AbstractFileTest {
     protected BlockingQueue<File> producedFiles;
 
     protected TestFileGenerator generatorThread;
-    protected FileListingThread listingThread;
+    protected FileListingTask listingTask;
     protected ExecutorService executor;
 
     protected Path directory;

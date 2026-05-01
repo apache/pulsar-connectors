@@ -45,9 +45,9 @@ public class FileSource extends PushSource<byte[]> {
         FileSourceConfig fileConfig = FileSourceConfig.load(config);
         fileConfig.validate();
 
-        // One extra for the File listing thread, and another for the cleanup thread
+        // One extra for the File listing task, and another for the cleanup thread
         executor = Executors.newFixedThreadPool(fileConfig.getNumWorkers() + 2);
-        executor.execute(new FileListingThread(fileConfig, workQueue, inProcess, recentlyProcessed));
+        executor.execute(new FileListingTask(fileConfig, workQueue, inProcess, recentlyProcessed));
         executor.execute(new ProcessedFileThread(fileConfig, recentlyProcessed));
 
         for (int idx = 0; idx < fileConfig.getNumWorkers(); idx++) {

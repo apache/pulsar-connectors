@@ -35,11 +35,11 @@ import java.util.regex.Pattern;
 import org.apache.commons.lang3.StringUtils;
 
 /**
- * Worker thread that checks the configured input directory for
+ * Worker that checks the configured input directory for
  * files that meet the provided filtering criteria, and publishes
  * them to a work queue for processing by the FileConsumerThreads.
  */
-public class FileListingThread extends Thread {
+public class FileListingTask implements Runnable {
 
     private final AtomicLong queueLastUpdated = new AtomicLong(0L);
     private final Lock listingLock = new ReentrantLock();
@@ -53,10 +53,10 @@ public class FileListingThread extends Thread {
     private final boolean keepOriginal;
     private final long pollingInterval;
 
-    public FileListingThread(FileSourceConfig fileConfig,
-            BlockingQueue<File> workQueue,
-            BlockingQueue<File> inProcess,
-            BlockingQueue<File> recentlyProcessed) {
+    public FileListingTask(FileSourceConfig fileConfig,
+                           BlockingQueue<File> workQueue,
+                           BlockingQueue<File> inProcess,
+                           BlockingQueue<File> recentlyProcessed) {
         this.workQueue = workQueue;
         this.inProcess = inProcess;
         this.recentlyProcessed = recentlyProcessed;
@@ -68,9 +68,10 @@ public class FileListingThread extends Thread {
         fileFilterRef.set(createFileFilter(fileConfig));
     }
 
+    @Override
     public void run() {
-        while (true) {
-            if ((queueLastUpdated.get() < System.currentTimeMillis() - pollingInterval) && listingLock.tryLock()) {
+        while (!Thread.currentThread().isInterrupted()) {
+            if ((queueLastUpdated.get() <= System.currentTimeMillis() - pollingInterval) && listingLock.tryLock()) {
                 try {
                     final File directory = new File(inputDir);
                     final Set<File> listing = performListing(directory, fileFilterRef.get(), recurseDirs);
@@ -97,9 +98,10 @@ public class FileListingThread extends Thread {
             }
 
             try {
-                sleep(pollingInterval - 1);
+                Thread.sleep(pollingInterval);
             } catch (InterruptedException e) {
-                // Just ignore
+                Thread.currentThread().interrupt();
+                break;
             }
         }
     }
