@@ -126,7 +126,7 @@ public class PulsarKafkaSinkTaskContext implements SinkTaskContext {
     public Map<TopicPartition, OffsetAndMetadata> currentOffsets() {
         Map<TopicPartition, OffsetAndMetadata> snapshot = Maps.newHashMapWithExpectedSize(currentOffsets.size());
         currentOffsets.forEach((topicPartition, offset) -> {
-            if (offset > 0) {
+            if (offset >= 0) {
                 snapshot.put(topicPartition,
                         new OffsetAndMetadata(offset, Optional.empty(), null));
             }
