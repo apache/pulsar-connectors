@@ -168,15 +168,12 @@ public abstract class KafkaAbstractSource<V> extends PushSource<V> {
     @SuppressWarnings("unchecked")
     public void start() {
         LOG.info("Starting subscribe kafka source on {}", kafkaSourceConfig.getTopic());
+
+        // 1. REVERT: Keep subscribe on the main thread so initialization errors fail synchronously
+        consumer.subscribe(Collections.singletonList(kafkaSourceConfig.getTopic()));
+
         runnerThread = new Thread(() -> {
             LOG.info("Kafka source started.");
-            try {
-                consumer.subscribe(Collections.singletonList(kafkaSourceConfig.getTopic()));
-            } catch (Exception e) {
-                LOG.error("Failed to subscribe to Kafka topic", e);
-                notifyError(e);
-                return;
-            }
 
             while (running) {
                 try {
@@ -193,15 +190,19 @@ public abstract class KafkaAbstractSource<V> extends PushSource<V> {
                         index++;
                     }
                     if (!kafkaSourceConfig.isAutoCommitEnabled()) {
-                        // Wait about 2/3 of the time of maxPollIntervalMs.
                         CompletableFuture.allOf(futures).get(maxPollIntervalMs * 2 / 3, TimeUnit.MILLISECONDS);
                         consumer.commitSync();
                     }
                 } catch (Exception e) {
+                    if (!running) {
+                        LOG.info("Kafka source is shutting down gracefully. Ignoring interrupt.");
+                        break;
+                    }
+
                     LOG.error("Error while processing records", e);
                     notifyError(e);
 
-                    // Safely interrupt the stuck Instance Thread
+                    // Fire the flare to break the I/O deadlock
                     if (instanceThread != null && instanceThread.isAlive()) {
                         LOG.warn("Interrupting the Instance Thread to break I/O deadlock.");
                         instanceThread.interrupt();
@@ -218,7 +219,7 @@ public abstract class KafkaAbstractSource<V> extends PushSource<V> {
             LOG.error("[{}] Uncaught error while consuming records", t.getName(), e);
             notifyError(new RuntimeException(e));
 
-            if (instanceThread != null && instanceThread.isAlive()) {
+            if (running && instanceThread != null && instanceThread.isAlive()) {
                 LOG.warn("Interrupting the Instance Thread due to uncaught consumer thread exception.");
                 instanceThread.interrupt();
             }
