@@ -1207,8 +1207,10 @@ public class KafkaConnectSinkTest extends ProducerConsumerBase {
 
         // offset is 0 for the first written record
         assertEquals(sink.currentOffset(topicName, partition), 0);
-        // currentOffsets() should include the first record (offset 0) when processed by ackUntil
-        assertEquals(sink.taskContext.currentOffsets().size(), 1);
+        // current offsets map returned by the PulsarKafkaSinkTaskContext should contain the record with offset 0
+        assertEquals(
+                sink.taskContext.currentOffsets().get(new TopicPartition(topicName, partition)).offset(), 0
+        );
 
         entryId.set(1);
         sink.write(record);
