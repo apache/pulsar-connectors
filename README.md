@@ -58,6 +58,7 @@ mounting them into the `apachepulsar/pulsar` Docker image.
 | Kafka | Apache Kafka |
 | Kinesis | Amazon Kinesis Data Streams |
 | MongoDB | MongoDB |
+| MQTT | MQTT broker |
 | Redis | Redis |
 | Solr | Apache Solr |
 

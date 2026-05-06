@@ -65,6 +65,7 @@ dependencies {
     connectorNars(project(":influxdb"))
     connectorNars(project(":redis"))
     connectorNars(project(":solr"))
+    connectorNars(project(":mqtt"))
     connectorNars(project(":dynamodb"))
     connectorNars(project(":alluxio"))
     connectorNars(project(":azure-data-explorer"))

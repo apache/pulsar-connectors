@@ -86,6 +86,7 @@ include("nsq")
 include("rabbitmq")
 include("redis")
 include("solr")
+include("mqtt")
 
 // JDBC — parent + sub-modules with qualified names to avoid clashes with debezium
 include("jdbc")
