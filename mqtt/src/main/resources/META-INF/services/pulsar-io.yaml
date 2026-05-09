@@ -16,7 +16,7 @@
 # specific language governing permissions and limitations
 # under the License.
 #
-name: mqtt-sink
+name: mqtt
 description: MQTT sink connector
 sinkClass: org.apache.pulsar.io.mqtt.MqttSink
 sinkConfigClass: org.apache.pulsar.io.mqtt.MqttSinkConfig

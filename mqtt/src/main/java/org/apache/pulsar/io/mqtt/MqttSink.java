@@ -21,6 +21,7 @@ package org.apache.pulsar.io.mqtt;
 import com.hivemq.client.mqtt.MqttClient;
 import com.hivemq.client.mqtt.datatypes.MqttQos;
 import com.hivemq.client.mqtt.mqtt5.Mqtt5AsyncClient;
+import com.hivemq.client.mqtt.mqtt5.Mqtt5ClientBuilder;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
@@ -33,7 +34,7 @@ import org.apache.pulsar.io.core.annotations.Connector;
 import org.apache.pulsar.io.core.annotations.IOType;
 
 @Connector(
-        name = "mqtt-sink",
+        name = "mqtt",
         type = IOType.SINK,
         help = "A sink connector that moves messages from Pulsar to MQTT.",
         configClass = MqttSinkConfig.class
@@ -63,7 +64,7 @@ public class MqttSink implements Sink<byte[]> {
             builder = builder.sslWithDefaultConfig();
         }
 
-        mqttClient = builder.buildAsync();
+        mqttClient = buildClient(builder);
         if (StringUtils.isNotBlank(mqttSinkConfig.getUsername())) {
             var authBuilder = mqttClient.connectWith()
                     .cleanStart(mqttSinkConfig.isCleanStart())
@@ -85,6 +86,10 @@ public class MqttSink implements Sink<byte[]> {
         }
         log.info("MQTT sink connected to {}:{}.",
                 mqttSinkConfig.getServerHost(), mqttSinkConfig.getServerPort());
+    }
+
+    Mqtt5AsyncClient buildClient(Mqtt5ClientBuilder builder) {
+        return builder.buildAsync();
     }
 
     @Override

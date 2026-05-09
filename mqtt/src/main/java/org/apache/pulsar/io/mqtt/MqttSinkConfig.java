@@ -111,6 +111,8 @@ public class MqttSinkConfig implements Serializable {
         Preconditions.checkArgument(StringUtils.isNotBlank(serverHost), "serverHost cannot be blank");
         Preconditions.checkArgument(serverPort > 0, "serverPort must be a positive integer");
         Preconditions.checkArgument(StringUtils.isNotBlank(topic), "topic cannot be blank");
+        Preconditions.checkArgument(StringUtils.isNotBlank(username) || StringUtils.isBlank(password),
+                "password cannot be set when username is blank");
         Preconditions.checkArgument(qos >= 0 && qos <= 2, "qos must be one of 0, 1, 2");
         Preconditions.checkArgument(keepAliveIntervalSec >= 0, "keepAliveIntervalSec must be >= 0");
         Preconditions.checkArgument(connectionTimeoutMs > 0, "connectionTimeoutMs must be > 0");

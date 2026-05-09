@@ -24,8 +24,12 @@ import static org.testng.Assert.assertNotNull;
 import static org.testng.Assert.assertTrue;
 import java.io.File;
 import java.io.IOException;
+import java.net.URISyntaxException;
+import java.net.URL;
+import java.nio.file.Paths;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Objects;
 import org.apache.pulsar.io.core.SinkContext;
 import org.mockito.Mockito;
 import org.testng.annotations.Test;
@@ -33,7 +37,7 @@ import org.testng.annotations.Test;
 public class MqttSinkConfigTest {
 
     @Test
-    public void loadFromYamlFileTest() throws IOException {
+    public void loadFromYamlFileTest() throws Exception {
         File yamlFile = getFile("sinkConfig.yaml");
         MqttSinkConfig config = MqttSinkConfig.load(yamlFile.getAbsolutePath());
         assertNotNull(config);
@@ -95,6 +99,16 @@ public class MqttSinkConfigTest {
         config.validate();
     }
 
+    @Test(expectedExceptions = IllegalArgumentException.class,
+            expectedExceptionsMessageRegExp = "password cannot be set when username is blank")
+    public void passwordWithoutUsernameValidateTest() throws IOException {
+        Map<String, Object> map = baseConfigMap();
+        map.put("username", "");
+        SinkContext sinkContext = Mockito.mock(SinkContext.class);
+        MqttSinkConfig config = MqttSinkConfig.load(map, sinkContext);
+        config.validate();
+    }
+
     private static Map<String, Object> baseConfigMap() {
         Map<String, Object> map = new HashMap<>();
         map.put("serverHost", "localhost");
@@ -111,8 +125,9 @@ public class MqttSinkConfigTest {
         return map;
     }
 
-    private File getFile(String name) {
-        ClassLoader classLoader = getClass().getClassLoader();
-        return new File(classLoader.getResource(name).getFile());
+    private File getFile(String name) throws URISyntaxException {
+        URL resource = Objects.requireNonNull(getClass().getClassLoader().getResource(name),
+                "Missing test resource: " + name);
+        return Paths.get(resource.toURI()).toFile();
     }
 }

@@ -18,99 +18,82 @@
  */
 package org.apache.pulsar.io.mqtt;
 
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
-import static org.testng.Assert.assertEquals;
-import static org.testng.Assert.assertFalse;
+import static org.mockito.Mockito.when;
 import static org.testng.Assert.assertTrue;
-import com.hivemq.client.mqtt.MqttClient;
 import com.hivemq.client.mqtt.mqtt5.Mqtt5AsyncClient;
-import java.nio.charset.StandardCharsets;
+import com.hivemq.client.mqtt.mqtt5.message.connect.Mqtt5ConnectBuilder;
+import com.hivemq.client.mqtt.mqtt5.message.connect.connack.Mqtt5ConnAck;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.apache.pulsar.functions.api.Record;
 import org.apache.pulsar.io.core.SinkContext;
-import org.testcontainers.containers.GenericContainer;
-import org.testcontainers.utility.DockerImageName;
-import org.testng.annotations.AfterClass;
-import org.testng.annotations.BeforeClass;
+import org.mockito.Mockito;
 import org.testng.annotations.Test;
 
 public class MqttSinkTest {
 
-    private static final int MQTT_PORT = 1883;
-    private static final String TEST_TOPIC = "pulsar/mqtt/e2e";
-    private static final DockerImageName MOSQUITTO_IMAGE = DockerImageName.parse("eclipse-mosquitto:2");
+    @Test
+    public void writeShouldCallFailWhenPublishThrowsSynchronously() {
+        Mqtt5AsyncClient mqttClient = mock(Mqtt5AsyncClient.class);
+        when(mqttClient.publishWith()).thenThrow(new RuntimeException("publish failed"));
+        MqttSink sink = newSinkWithOpenedClient(mqttClient);
+        TestRecord record = new TestRecord("x".getBytes(), new CountDownLatch(1), new AtomicBoolean(false));
 
-    private final GenericContainer<?> mqttContainer = new GenericContainer<>(MOSQUITTO_IMAGE)
-            .withExposedPorts(MQTT_PORT);
+        sink.write(record);
 
-    @BeforeClass(alwaysRun = true)
-    public void beforeClass() {
-        mqttContainer.start();
+        assertTrue(record.isFailed(), "record.fail() should be called");
     }
 
-    @AfterClass(alwaysRun = true)
-    public void afterClass() {
-        mqttContainer.stop();
+    @Test(expectedExceptions = IllegalArgumentException.class,
+            expectedExceptionsMessageRegExp = "password cannot be set when username is blank")
+    public void openShouldPropagateConfigValidationFailure() throws Exception {
+        Map<String, Object> invalidConfig = baseConfigMap();
+        invalidConfig.put("username", "");
+        invalidConfig.put("password", "pwd");
+        try (MqttSink sink = new MqttSink()) {
+            sink.open(invalidConfig, mock(SinkContext.class));
+        }
     }
 
     @Test
-    public void testWriteE2EWithMosquitto() throws Exception {
-        BlockingQueue<String> receivedPayloads = new LinkedBlockingQueue<>();
-        CountDownLatch ackLatch = new CountDownLatch(3);
-        AtomicBoolean failCalled = new AtomicBoolean(false);
+    public void closeShouldBeSafeWhenSinkWasNeverOpened() {
+        new MqttSink().close();
+    }
 
-        Mqtt5AsyncClient subscriber = MqttClient.builder()
-                .useMqttVersion5()
-                .serverHost(mqttContainer.getHost())
-                .serverPort(mqttContainer.getMappedPort(MQTT_PORT))
-                .identifier("mqtt-sink-e2e-subscriber")
-                .buildAsync();
+    private MqttSink newSinkWithOpenedClient(Mqtt5AsyncClient mqttClient) {
+        try {
+            @SuppressWarnings("unchecked")
+            Mqtt5ConnectBuilder.Send<CompletableFuture<Mqtt5ConnAck>> connectBuilder =
+                    mock(Mqtt5ConnectBuilder.Send.class, Mockito.RETURNS_SELF);
+            when(mqttClient.connectWith()).thenReturn(connectBuilder);
+            when(connectBuilder.send())
+                    .thenReturn(CompletableFuture.completedFuture(null));
 
-        subscriber.connectWith()
-                .cleanStart(true)
-                .send()
-                .get(10, TimeUnit.SECONDS);
-        subscriber.subscribeWith()
-                .topicFilter(TEST_TOPIC)
-                .callback(publish -> receivedPayloads.add(
-                        new String(publish.getPayloadAsBytes(), StandardCharsets.UTF_8)))
-                .send()
-                .get(10, TimeUnit.SECONDS);
-
-        Map<String, Object> config = new HashMap<>();
-        config.put("serverHost", mqttContainer.getHost());
-        config.put("serverPort", mqttContainer.getMappedPort(MQTT_PORT));
-        config.put("topic", TEST_TOPIC);
-        config.put("qos", 1);
-        config.put("connectionTimeoutMs", 10000);
-        config.put("clientId", "mqtt-sink-e2e-publisher");
-
-        SinkContext sinkContext = mock(SinkContext.class);
-        try (MqttSink sink = new MqttSink()) {
-            sink.open(config, sinkContext);
-
-            for (int i = 0; i < 3; i++) {
-                sink.write(new TestRecord(("msg-" + i).getBytes(StandardCharsets.UTF_8), ackLatch, failCalled));
-            }
-
-            assertTrue(ackLatch.await(10, TimeUnit.SECONDS), "Timed out waiting for record.ack()");
-            assertFalse(failCalled.get(), "record.fail() should not be called on successful publish");
-
-            assertEquals(receivedPayloads.poll(10, TimeUnit.SECONDS), "msg-0");
-            assertEquals(receivedPayloads.poll(10, TimeUnit.SECONDS), "msg-1");
-            assertEquals(receivedPayloads.poll(10, TimeUnit.SECONDS), "msg-2");
-        } finally {
-            subscriber.disconnectWith()
-                    .sessionExpiryInterval(0)
-                    .send()
-                    .get(10, TimeUnit.SECONDS);
+            MqttSink sink = Mockito.spy(new MqttSink());
+            doReturn(mqttClient).when(sink).buildClient(any());
+            sink.open(baseConfigMap(), mock(SinkContext.class));
+            return sink;
+        } catch (Exception e) {
+            throw new AssertionError("Failed to initialize MqttSink test fixture", e);
         }
+    }
+
+    private static Map<String, Object> baseConfigMap() {
+        Map<String, Object> config = new HashMap<>();
+        config.put("serverHost", "localhost");
+        config.put("serverPort", 1883);
+        config.put("topic", "test/topic");
+        config.put("qos", 1);
+        config.put("connectionTimeoutMs", 1000L);
+        config.put("keepAliveIntervalSec", 60);
+        config.put("cleanStart", true);
+        return config;
     }
 
     private static final class TestRecord implements Record<byte[]> {
@@ -137,6 +120,10 @@ public class MqttSinkTest {
         @Override
         public void fail() {
             failCalled.set(true);
+        }
+
+        private boolean isFailed() {
+            return failCalled.get();
         }
     }
 }

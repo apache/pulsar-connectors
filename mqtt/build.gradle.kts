@@ -22,6 +22,15 @@ plugins {
     id("pulsar-connectors.nar-conventions")
 }
 
+val integrationTest by sourceSets.creating {
+    compileClasspath += sourceSets.main.get().output + configurations.testCompileClasspath.get()
+    runtimeClasspath += output + sourceSets.main.get().output + configurations.testRuntimeClasspath.get()
+    resources.srcDir(rootProject.file("gradle/test-resources"))
+}
+
+configurations[integrationTest.implementationConfigurationName].extendsFrom(configurations.testImplementation.get())
+configurations[integrationTest.runtimeOnlyConfigurationName].extendsFrom(configurations.testRuntimeOnly.get())
+
 dependencies {
     implementation(libs.pulsar.io.common)
     implementation(libs.pulsar.io.core)
@@ -29,7 +38,16 @@ dependencies {
     implementation(libs.jackson.databind)
     implementation(libs.jackson.dataformat.yaml)
     implementation(libs.commons.lang3)
+    implementation(libs.guava)
     implementation(libs.hivemq.mqtt.client)
 
-    testImplementation(libs.testcontainers)
+    add(integrationTest.implementationConfigurationName, libs.testcontainers)
+}
+
+tasks.register<Test>("integrationTest") {
+    description = "Runs MQTT integration tests that require Docker."
+    group = LifecycleBasePlugin.VERIFICATION_GROUP
+    testClassesDirs = integrationTest.output.classesDirs
+    classpath = integrationTest.runtimeClasspath
+    shouldRunAfter("test")
 }
