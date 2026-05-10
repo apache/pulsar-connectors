@@ -176,6 +176,7 @@ aerospike-client = "4.5.0"
 aws-sdk = "1.12.788"
 aws-sdk2 = "2.32.28"
 rabbitmq-client = "5.28.0"
+hivemq-mqtt-client = "1.3.13"
 cassandra-driver = "3.11.2"
 mongodb-driver = "5.4.0"
 influxdb-client = "7.3.0"
@@ -494,6 +495,7 @@ solr-test-framework = { module = "org.apache.solr:solr-test-framework", version.
 solr-core = { module = "org.apache.solr:solr-core", version.ref = "solr" }
 # Messaging
 rabbitmq-amqp-client = { module = "com.rabbitmq:amqp-client", version.ref = "rabbitmq-client" }
+hivemq-mqtt-client = { module = "com.hivemq:hivemq-mqtt-client", version.ref = "hivemq-mqtt-client" }
 nsq-j = { module = "com.sproutsocial:nsq-j", version.ref = "nsq-client" }
 # Time series
 influxdb-client-java = { module = "com.influxdb:influxdb-client-java", version.ref = "influxdb-client" }
