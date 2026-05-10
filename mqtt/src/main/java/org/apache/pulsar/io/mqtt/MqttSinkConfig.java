@@ -45,7 +45,6 @@ public class MqttSinkConfig implements Serializable {
     private String serverHost;
 
     @FieldDoc(
-            required = true,
             defaultValue = "1883",
             help = "The MQTT broker port.")
     private int serverPort = 1883;

@@ -126,6 +126,9 @@ public class MqttSink implements Sink<byte[]> {
             mqttClient.disconnectWith()
                     .send()
                     .get(mqttSinkConfig.getConnectionTimeoutMs(), TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            log.warn("MQTT disconnect was interrupted", e);
         } catch (Exception e) {
             log.warn("Failed to disconnect MQTT client cleanly", e);
         }
