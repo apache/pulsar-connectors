@@ -189,4 +189,44 @@ public class SolrGenericRecordSinkTest {
         Assert.assertEquals(doc.getFieldValue("profile_id"), "801");
         Assert.assertNull(doc.getFieldValue("user_id"), "user_id was not provided, should be null");
     }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void testDebeziumUnwrapDelete() throws Exception {
+        configs.put("unwrapDebeziumRecord", true);
+        sink.open(configs, null);
+
+        // Build root record
+        GenericRecord mockRootRecord = mock(GenericRecord.class);
+        Record<GenericRecord> mockMessage = mock(Record.class);
+        when(mockMessage.getValue()).thenReturn(mockRootRecord);
+
+        GenericRecord mockValueRecord = mock(GenericRecord.class);
+        when(mockRootRecord.getNativeObject()).thenReturn(new KeyValue<>("key", mockValueRecord));
+
+        // Mock Debezium DELETE signature: 'after' is null, 'before' and 'op' are present
+        Field beforeSchemaField = mock(Field.class);
+        when(beforeSchemaField.getName()).thenReturn("before");
+        Field opField = mock(Field.class);
+        when(opField.getName()).thenReturn("op");
+        when(mockValueRecord.getFields()).thenReturn(Arrays.asList(beforeSchemaField, opField));
+
+        // 'after' is null for deletes
+        when(mockValueRecord.getField("after")).thenReturn(null);
+
+        // Mock 'before' record containing the ID to be deleted
+        GenericRecord mockBeforeRecord = mock(GenericRecord.class);
+        when(mockValueRecord.getField("before")).thenReturn(mockBeforeRecord);
+
+        Field idField = mock(Field.class);
+        when(idField.getName()).thenReturn("id");
+        when(mockBeforeRecord.getFields()).thenReturn(Arrays.asList(idField));
+        when(mockBeforeRecord.getField(idField)).thenReturn(500);
+
+        // This should trigger executeSolrDelete and return null
+        SolrInputDocument doc = sink.convert(mockMessage);
+
+        // In our refactored logic, a DELETE returns null so the parent class can ACK it
+        Assert.assertNull(doc, "Document should be null for DELETE events to trigger ACK");
+    }
 }
