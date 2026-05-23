@@ -31,7 +31,7 @@ import org.testng.Assert;
 import org.testng.annotations.AfterClass;
 import org.testng.annotations.BeforeClass;
 import org.testng.annotations.Test;
-
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Properties;
@@ -39,7 +39,8 @@ import java.util.Properties;
 
 public class KafkaSourceDeadlockTest {
 
-    public KafkaContainer kafka = new KafkaContainer(DockerImageName.parse("confluentinc/cp-kafka:7.3.0"));
+    public KafkaContainer kafka = new KafkaContainer(DockerImageName.parse("confluentinc/cp-kafka:7.3.0"))
+            .withStartupTimeout(Duration.ofMinutes(5));
 
     private KafkaBytesSource source;
     private SourceContext mockContext;
