@@ -18,8 +18,10 @@
  */
 package org.apache.pulsar.io.file;
 
+import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertNotNull;
+import static org.testng.Assert.assertThrows;
 import static org.testng.Assert.assertTrue;
 import java.io.File;
 import java.io.IOException;
@@ -142,8 +144,60 @@ public class FileSourceConfigTest {
         config.validate();
     }
 
+    @Test
+    public void testDefaultMaxQueueSize() throws Exception {
+        Map<String, Object> map = new HashMap<>();
+        map.put("inputDirectory", "/tmp"); // Dummy directory just to pass basic validation
+
+        FileSourceConfig config = FileSourceConfig.load(map);
+
+        // Assert that if the user provides no value, it defaults to 1000
+        assertEquals(config.getMaxQueueSize(), Integer.valueOf(1000));
+    }
+
+    @Test
+    public void testValidMaxQueueSize() throws Exception {
+        Map<String, Object> map = new HashMap<>();
+        map.put("inputDirectory", "/tmp");
+        map.put("maxQueueSize", 5000);
+
+        FileSourceConfig config = FileSourceConfig.load(map);
+
+        // Assert that the custom value is loaded correctly
+        assertEquals(config.getMaxQueueSize(), Integer.valueOf(5000));
+
+        // Should not throw any exceptions
+        config.validate();
+    }
+
+    @Test
+    public void testInvalidMaxQueueSize() {
+        Map<String, Object> map = new HashMap<>();
+        map.put("inputDirectory", "/tmp");
+
+        // Test 0
+        map.put("maxQueueSize", 0);
+        assertThrows(IllegalArgumentException.class, () -> {
+            FileSourceConfig config = FileSourceConfig.load(map);
+            config.validate();
+        });
+
+        // Test Negative Number
+        map.put("maxQueueSize", -5);
+        assertThrows(IllegalArgumentException.class, () -> {
+            FileSourceConfig config = FileSourceConfig.load(map);
+            config.validate();
+        });
+    }
+
     private File getFile(String name) {
         ClassLoader classLoader = getClass().getClassLoader();
-        return new File(classLoader.getResource(name).getFile());
+        try {
+            // Using .toURI() automatically decodes the %20 back into a normal space
+            return new File(classLoader.getResource(name).toURI());
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to parse file path", e);
+        }
+
     }
 }
