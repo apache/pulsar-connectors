@@ -192,12 +192,6 @@ public class FileSourceConfigTest {
 
     private File getFile(String name) {
         ClassLoader classLoader = getClass().getClassLoader();
-        try {
-            // Using .toURI() automatically decodes the %20 back into a normal space
-            return new File(classLoader.getResource(name).toURI());
-        } catch (Exception e) {
-            throw new RuntimeException("Failed to parse file path", e);
-        }
-
+        return new File(classLoader.getResource(name).getFile());
     }
 }
