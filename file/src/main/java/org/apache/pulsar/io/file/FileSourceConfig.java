@@ -111,6 +111,12 @@ public class FileSourceConfig implements Serializable {
     private Integer numWorkers = 1;
 
     /**
+     * The maximum capacity of the internal queues. This provides backpressure
+     * to prevent OutOfMemoryErrors when processing is slower than file listing.
+     */
+    private Integer maxQueueSize = 1000;
+
+    /**
      * If set, do not delete but only rename file that has been processed.
      * This config only work when 'keepFile' property is false.
      */
@@ -168,6 +174,10 @@ public class FileSourceConfig implements Serializable {
 
         if (numWorkers != null && numWorkers <= 0) {
             throw new IllegalArgumentException("The property numWorkers must be greater than zero");
+        }
+
+        if (maxQueueSize != null && maxQueueSize <= 0) {
+            throw new IllegalArgumentException("The property maxQueueSize must be greater than zero");
         }
 
         if (processedFileSuffix != null && keepFile) {
