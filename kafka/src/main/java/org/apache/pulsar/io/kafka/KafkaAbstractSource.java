@@ -18,6 +18,7 @@
  */
 package org.apache.pulsar.io.kafka;
 
+import com.google.common.annotations.VisibleForTesting;
 import io.jsonwebtoken.io.Encoders;
 import java.time.Duration;
 import java.util.Collections;
@@ -163,6 +164,21 @@ public abstract class KafkaAbstractSource<V> extends PushSource<V> {
             consumer = null;
         }
         LOG.info("Kafka source stopped.");
+    }
+
+    @VisibleForTesting
+    void setInstanceThread(Thread instanceThread) {
+        this.instanceThread = instanceThread;
+    }
+
+    @VisibleForTesting
+    void setKafkaSourceConfig(KafkaSourceConfig kafkaSourceConfig) {
+        this.kafkaSourceConfig = kafkaSourceConfig;
+    }
+
+    @VisibleForTesting
+    void setConsumer(Consumer<Object, Object> consumer) {
+        this.consumer = consumer;
     }
 
     @SuppressWarnings("unchecked")
