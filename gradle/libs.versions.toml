@@ -423,6 +423,7 @@ testcontainers-localstack = { module = "org.testcontainers:localstack" }
 testcontainers-rabbitmq = { module = "org.testcontainers:rabbitmq" }
 testcontainers-kafka = { module = "org.testcontainers:kafka" }
 testcontainers-mysql = { module = "org.testcontainers:mysql" }
+testcontainers-clickhouse = { module = "org.testcontainers:clickhouse" }
 testcontainers-postgresql = { module = "org.testcontainers:postgresql" }
 testcontainers-mongodb = { module = "org.testcontainers:mongodb" }
 testcontainers-pulsar = { module = "org.testcontainers:pulsar" }
