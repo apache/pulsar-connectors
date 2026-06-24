@@ -423,6 +423,7 @@ testcontainers-localstack = { module = "org.testcontainers:localstack" }
 testcontainers-rabbitmq = { module = "org.testcontainers:rabbitmq" }
 testcontainers-kafka = { module = "org.testcontainers:kafka" }
 testcontainers-mysql = { module = "org.testcontainers:mysql" }
+testcontainers-clickhouse = { module = "org.testcontainers:clickhouse" }
 testcontainers-postgresql = { module = "org.testcontainers:postgresql" }
 testcontainers-mongodb = { module = "org.testcontainers:mongodb" }
 testcontainers-pulsar = { module = "org.testcontainers:pulsar" }
@@ -467,7 +468,7 @@ debezium-connector-sqlserver = { module = "io.debezium:debezium-connector-sqlser
 # Database drivers
 postgresql-jdbc = "org.postgresql:postgresql:42.7.10"
 sqlite-jdbc = "org.xerial:sqlite-jdbc:3.47.1.0"
-clickhouse-jdbc = "com.clickhouse:clickhouse-jdbc:0.4.6"
+clickhouse-jdbc = "com.clickhouse:clickhouse-jdbc:0.9.8"
 mariadb-jdbc = "org.mariadb.jdbc:mariadb-java-client:3.5.5"
 mysql-connector-j = "com.mysql:mysql-connector-j:9.4.0"
 openmldb-jdbc = { module = "com.4paradigm.openmldb:openmldb-jdbc", version.ref = "openmldb" }
