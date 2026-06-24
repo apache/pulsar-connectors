@@ -110,4 +110,43 @@ public class KinesisRecordTest {
 
         assertTrue(properties.isEmpty());
     }
+
+    // --- MessageKeyMode tests ---
+
+    @Test
+    public void testDefaultKeyModeUsesPartitionKey() {
+        // The 5-arg constructor defaults to PARTITION_KEY.
+        KinesisRecord record = new KinesisRecord(mockRecord, shardId, millisBehindLatest,
+                Collections.emptySet(), null);
+        assertTrue(record.getKey().isPresent());
+        assertEquals(record.getKey().get(), partitionKey);
+    }
+
+    @Test
+    public void testExplicitPartitionKeyMode() {
+        KinesisRecord record = new KinesisRecord(mockRecord, shardId, millisBehindLatest,
+                Collections.emptySet(), null, KinesisSourceConfig.MessageKeyMode.PARTITION_KEY);
+        assertTrue(record.getKey().isPresent());
+        assertEquals(record.getKey().get(), partitionKey);
+    }
+
+    @Test
+    public void testShardIdKeyMode() {
+        KinesisRecord record = new KinesisRecord(mockRecord, shardId, millisBehindLatest,
+                Collections.emptySet(), null, KinesisSourceConfig.MessageKeyMode.SHARD_ID);
+        assertTrue(record.getKey().isPresent());
+        assertEquals(record.getKey().get(), shardId);
+    }
+
+    @Test
+    public void testShardIdKeyModeDoesNotAffectPartitionKeyProperty() {
+        // Even in SHARD_ID mode, the kinesis.partition.key *property* must still reflect the
+        // original record partition key (property semantics are independent of the message key).
+        Set<String> propertiesToInclude = Collections.singleton(KinesisRecord.PARTITION_KEY);
+        KinesisRecord record = new KinesisRecord(mockRecord, shardId, millisBehindLatest,
+                propertiesToInclude, null, KinesisSourceConfig.MessageKeyMode.SHARD_ID);
+        assertTrue(record.getKey().isPresent());
+        assertEquals(record.getKey().get(), shardId);
+        assertEquals(record.getProperties().get(KinesisRecord.PARTITION_KEY), partitionKey);
+    }
 }

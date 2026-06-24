@@ -18,6 +18,8 @@
  */
 package org.apache.pulsar.io.kinesis;
 
+import java.util.ArrayDeque;
+import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
@@ -51,13 +53,24 @@ public class KinesisRecordProcessor implements ShardRecordProcessor {
     private final LinkedBlockingQueue<KinesisRecord> queue;
     private final SourceContext sourceContext;
     private final Set<String> propertiesToInclude;
+    private final KinesisSourceConfig.MessageKeyMode messageKeyMode;
     private final ScheduledExecutorService checkpointExecutor;
     private final AtomicReference<RecordProcessorCheckpointer> checkpointerRef = new AtomicReference<>();
     private final AtomicBoolean isCheckpointing = new AtomicBoolean(false);
     private String kinesisShardId;
     private final AtomicInteger numRecordsInFlight = new AtomicInteger(0);
 
-    private volatile CheckpointSequenceNumber sequenceNumberNeedToCheckpoint = null;
+    // All checkpoint-position state below is guarded by checkpointLock. Acks arrive on multiple Kafka I/O
+    // threads, processRecords runs on the KCL thread, and triggerCheckpoint runs on the checkpointExecutor
+    // thread, so the deque/set/highest-acked triple must be mutated atomically as a group.
+    private final Object checkpointLock = new Object();
+    // Positions appended in processRecords, in KCL delivery (sequence) order.
+    private final ArrayDeque<CheckpointSequenceNumber> deliveredInOrder = new ArrayDeque<>();
+    // Positions acked but not yet collapsed into the contiguous prefix (acked ahead of an earlier gap).
+    private final HashSet<CheckpointSequenceNumber> ackedAwaitingCollapse = new HashSet<>();
+    // The highest position whose entire delivery-order prefix has been acked. The ONLY thing we checkpoint.
+    private CheckpointSequenceNumber highestContiguousAcked = null;
+
     private volatile CheckpointSequenceNumber lastCheckpointSequenceNumber = null;
 
     public KinesisRecordProcessor(LinkedBlockingQueue<KinesisRecord> queue, KinesisSourceConfig config,
@@ -67,6 +80,7 @@ public class KinesisRecordProcessor implements ShardRecordProcessor {
         this.numRetries = config.getNumRetries();
         this.backoffTime = config.getBackoffTime();
         this.propertiesToInclude = config.getPropertiesToInclude();
+        this.messageKeyMode = config.getMessageKeyMode();
         this.sourceContext = sourceContext;
         this.checkpointExecutor = checkpointExecutor;
     }
@@ -92,10 +106,17 @@ public class KinesisRecordProcessor implements ShardRecordProcessor {
                                 + "after {}ms.", kinesisShardId, checkpoint, attempt + 1, backoffTime);
                 safeSchedule(() -> tryCheckpointWithRetry(checkpointer, checkpoint, attempt + 1), backoffTime);
             }
+        } catch (IllegalArgumentException e) {
+            // KCL rejects a backward / out-of-range checkpoint with IllegalArgumentException. With the
+            // contiguous-prefix logic this should no longer happen, so surface it as a metric for alerting,
+            // but still skip-and-reschedule rather than crashing the connector.
+            log.warn("KCL rejected a backward/out-of-range checkpoint for shard {} at {}. Skipping this round; "
+                    + "will retry on the next interval.", kinesisShardId, checkpoint, e);
+            sourceContext.recordMetric("kinesisBackwardCheckpointDetected", 1);
+            scheduleNextCheckpoint();
         } catch (Exception e) {
-            // Non-retryable errors (e.g. KCL's IllegalArgumentException when an out-of-order ack tries to
-            // checkpoint a position behind the last checkpoint) must NOT crash the connector. Skip this
-            // round; a later ack with a higher position will advance the checkpoint on a subsequent cycle.
+            // Other non-retryable errors must NOT crash the connector. Skip this round; a later ack with a
+            // higher position will advance the checkpoint on a subsequent cycle.
             log.error("Non-retryable exception during checkpoint for shard {} at {}. Skipping this round; "
                     + "will retry on the next interval.", kinesisShardId, checkpoint, e);
             scheduleNextCheckpoint();
@@ -117,13 +138,29 @@ public class KinesisRecordProcessor implements ShardRecordProcessor {
     }
 
     public void updateSequenceNumberToCheckpoint(String sequenceNumber, long subSequenceNumber) {
-        CheckpointSequenceNumber newCheckpoint = new CheckpointSequenceNumber(sequenceNumber, subSequenceNumber);
-        log.debug("{} Updating sequence number to checkpoint {}", kinesisShardId, newCheckpoint);
-        this.sequenceNumberNeedToCheckpoint = newCheckpoint;
+        CheckpointSequenceNumber acked = new CheckpointSequenceNumber(sequenceNumber, subSequenceNumber);
+        log.debug("{} Record acked at {}", kinesisShardId, acked);
+        synchronized (checkpointLock) {
+            ackedAwaitingCollapse.add(acked);
+            // Collapse the longest contiguous, fully-acked prefix (in delivery order) into highestContiguousAcked.
+            // Stop at the first un-acked head: we must never advance the checkpoint past a still-in-flight
+            // lower sequence, otherwise a crash would resume AFTER it and lose it.
+            while (!deliveredInOrder.isEmpty()) {
+                CheckpointSequenceNumber head = deliveredInOrder.peekFirst();
+                if (!ackedAwaitingCollapse.remove(head)) {
+                    break;
+                }
+                deliveredInOrder.pollFirst();
+                highestContiguousAcked = head;
+            }
+        }
         this.numRecordsInFlight.decrementAndGet();
     }
 
     public void failed() {
+        // Intentionally do NOT remove this record's position from deliveredInOrder: a record that failed to
+        // be delivered downstream must keep blocking the contiguous-prefix collapse so the checkpoint can
+        // never advance past it. fatal() terminates the connector, which reprocesses from the last checkpoint.
         numRecordsInFlight.decrementAndGet();
         sourceContext.fatal(new PulsarClientException("Failed to process Kinesis records due send to pulsar topic"));
     }
@@ -141,7 +178,17 @@ public class KinesisRecordProcessor implements ShardRecordProcessor {
         try {
             if (isCheckpointing.compareAndSet(false, true)) {
                 final RecordProcessorCheckpointer checkpointer = checkpointerRef.get();
-                final CheckpointSequenceNumber currentCheckpoint = this.sequenceNumberNeedToCheckpoint;
+                final CheckpointSequenceNumber currentCheckpoint;
+                final int pendingGap;
+                synchronized (checkpointLock) {
+                    currentCheckpoint = this.highestContiguousAcked;
+                    pendingGap = deliveredInOrder.size();
+                }
+                // Emit metrics outside the lock. A rising kinesisCheckpointPendingGap means acks are stalled
+                // behind a gap (a data-loss exposure under the old last-writer-wins code; here it only delays
+                // the checkpoint from advancing).
+                sourceContext.recordMetric("kinesisRecordsInFlight", numRecordsInFlight.get());
+                sourceContext.recordMetric("kinesisCheckpointPendingGap", pendingGap);
                 if (checkpointer != null && currentCheckpoint != null && !currentCheckpoint.equals(
                         lastCheckpointSequenceNumber)) {
                     tryCheckpointWithRetry(checkpointer, currentCheckpoint, 1);
@@ -167,12 +214,24 @@ public class KinesisRecordProcessor implements ShardRecordProcessor {
         for (KinesisClientRecord record : processRecordsInput.records()) {
             log.debug("Add record with sequence number {}:{} to queue for shard {}.",
                     record.sequenceNumber(), record.subSequenceNumber(), kinesisShardId);
+            // Register the delivery-order position BEFORE the record can be read/acked from the queue, so a
+            // fast ack can never race ahead of its own deliveredInOrder entry. KCL delivers each position at
+            // most once to a given processor instance, so no de-duplication is needed here. queue.put may
+            // block, so the lock is released before the put.
+            synchronized (checkpointLock) {
+                deliveredInOrder.addLast(
+                        new CheckpointSequenceNumber(record.sequenceNumber(), record.subSequenceNumber()));
+            }
             try {
                 queue.put(new KinesisRecord(record, this.kinesisShardId, millisBehindLatest,
-                        propertiesToInclude, this));
+                        propertiesToInclude, this, messageKeyMode));
             } catch (Exception e) {
+                // The record never made it onto the queue, so it will never be read or acked. Its position
+                // stays in deliveredInOrder so the contiguous prefix cannot advance past this gap (no data
+                // loss); fatal() terminates the connector, which then reprocesses from the last checkpoint.
                 log.error("Unable to create and queue KinesisRecord for shard {}.", kinesisShardId, e);
                 sourceContext.fatal(e);
+                return;
             }
             numRecordsInFlight.incrementAndGet();
         }
@@ -189,7 +248,15 @@ public class KinesisRecordProcessor implements ShardRecordProcessor {
                 numRecordsInFlight.get(), kinesisShardId);
         try {
             for (int i = 0; i < numRetries; i++) {
-                if (numRecordsInFlight.get() == 0) {
+                // "Fully processed" means the entire delivery-order prefix has been acked (deque empty), not
+                // merely that in-flight reached 0: a record that failed downstream decrements in-flight but
+                // intentionally keeps its position in deliveredInOrder. Gating SHARD_END on deque-empty keeps
+                // the full checkpoint() from ever marking the shard complete while a gap remains.
+                boolean drained;
+                synchronized (checkpointLock) {
+                    drained = deliveredInOrder.isEmpty();
+                }
+                if (drained) {
                     processedInTime = true;
                     break;
                 }
@@ -217,7 +284,10 @@ public class KinesisRecordProcessor implements ShardRecordProcessor {
             } else {
                 log.warn("Not all records for shard {} were processed or not a shard end. "
                                 + "Performing best-effort checkpoint.", kinesisShardId);
-                final CheckpointSequenceNumber finalCheckpoint = this.sequenceNumberNeedToCheckpoint;
+                final CheckpointSequenceNumber finalCheckpoint;
+                synchronized (checkpointLock) {
+                    finalCheckpoint = this.highestContiguousAcked;
+                }
                 if (finalCheckpoint != null) {
                     checkpointer.checkpoint(finalCheckpoint.sequenceNumber(), finalCheckpoint.subSequenceNumber());
                 }
