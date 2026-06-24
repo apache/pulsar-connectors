@@ -68,6 +68,16 @@ public class MqttSinkConfigTest {
     }
 
     @Test
+    public void loadTopicPropertyFromMapTest() throws IOException {
+        Map<String, Object> map = baseConfigMap();
+        map.put("topicProperty", "mqttTopic");
+        SinkContext sinkContext = Mockito.mock(SinkContext.class);
+        MqttSinkConfig config = MqttSinkConfig.load(map, sinkContext);
+
+        assertEquals(config.getTopicProperty(), "mqttTopic");
+    }
+
+    @Test
     public void loadFromMapCredentialsFromSecretTest() throws IOException {
         Map<String, Object> map = baseConfigMap();
         map.remove("username");
