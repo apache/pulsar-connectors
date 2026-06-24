@@ -41,6 +41,7 @@ import software.amazon.kinesis.lifecycle.events.InitializationInput;
 import software.amazon.kinesis.lifecycle.events.ProcessRecordsInput;
 import software.amazon.kinesis.lifecycle.events.ShardEndedInput;
 import software.amazon.kinesis.lifecycle.events.ShutdownRequestedInput;
+import software.amazon.kinesis.exceptions.ThrottlingException;
 import software.amazon.kinesis.processor.RecordProcessorCheckpointer;
 import software.amazon.kinesis.retrieval.KinesisClientRecord;
 
@@ -119,6 +120,50 @@ public class KinesisRecordProcessorTest {
         scheduledCheckpointTask.run();
         // Verify checkpoint is now called with the new, advanced position.
         verify(checkpointer, times(1)).checkpoint("seq-1", 7L);
+    }
+
+    @Test
+    public void testNonRetryableCheckpointFailureDoesNotCrashConnector() throws Exception {
+        // Arrange: initialize schedules the first checkpoint task.
+        recordProcessor.initialize(createMockInitializationInput());
+        verify(checkpointExecutor, times(1))
+                .schedule(scheduledTaskCaptor.capture(), anyLong(), any(TimeUnit.class));
+        Runnable scheduledCheckpointTask = scheduledTaskCaptor.getValue();
+        recordProcessor.processRecords(createMockProcessRecordsInput(checkpointer));
+
+        // Simulate KCL rejecting a backward / out-of-range checkpoint (an IllegalArgumentException).
+        Mockito.doThrow(new IllegalArgumentException("Could not checkpoint ... did not fall into acceptable range"))
+                .when(checkpointer).checkpoint(any(String.class), anyLong());
+        recordProcessor.updateSequenceNumberToCheckpoint("seq-1", 5L);
+
+        // Act
+        scheduledCheckpointTask.run();
+
+        // Assert: the connector must not be terminated, and the checkpoint loop must be rescheduled
+        // (one schedule from initialize + one from the failed round).
+        verify(sourceContext, never()).fatal(any());
+        verify(checkpointExecutor, times(2)).schedule(any(Runnable.class), anyLong(), any(TimeUnit.class));
+    }
+
+    @Test
+    public void testExhaustedRetriableCheckpointFailureDoesNotCrashConnector() throws Exception {
+        // Arrange: numRetries == 1 (see setup), so the first throttling failure already exhausts retries.
+        recordProcessor.initialize(createMockInitializationInput());
+        verify(checkpointExecutor, times(1))
+                .schedule(scheduledTaskCaptor.capture(), anyLong(), any(TimeUnit.class));
+        Runnable scheduledCheckpointTask = scheduledTaskCaptor.getValue();
+        recordProcessor.processRecords(createMockProcessRecordsInput(checkpointer));
+
+        Mockito.doThrow(new ThrottlingException("throttled"))
+                .when(checkpointer).checkpoint(any(String.class), anyLong());
+        recordProcessor.updateSequenceNumberToCheckpoint("seq-1", 1L);
+
+        // Act
+        scheduledCheckpointTask.run();
+
+        // Assert: retries exhausted, but the connector survives and the loop is rescheduled.
+        verify(sourceContext, never()).fatal(any());
+        verify(checkpointExecutor, times(2)).schedule(any(Runnable.class), anyLong(), any(TimeUnit.class));
     }
 
     @Test(timeOut = 3000)

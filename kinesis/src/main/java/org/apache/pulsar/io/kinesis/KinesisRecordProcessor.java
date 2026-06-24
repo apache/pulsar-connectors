@@ -20,6 +20,7 @@ package org.apache.pulsar.io.kinesis;
 
 import java.util.Set;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -78,23 +79,40 @@ public class KinesisRecordProcessor implements ShardRecordProcessor {
             checkpointer.checkpoint(checkpoint.sequenceNumber(), checkpoint.subSequenceNumber());
             lastCheckpointSequenceNumber = checkpoint;
             log.info("Successfully checkpointed shard {} at {}", kinesisShardId, checkpoint);
-            isCheckpointing.set(false);
-            checkpointExecutor.schedule(this::triggerCheckpoint, checkpointInterval, TimeUnit.MILLISECONDS);
+            scheduleNextCheckpoint();
         } catch (ThrottlingException | KinesisClientLibDependencyException e) {
             if (attempt >= numRetries) {
-                log.error("Checkpoint for shard {} failed after {} attempts at {}. Terminating.",
-                        kinesisShardId, numRetries, checkpoint, e);
-                sourceContext.fatal(e);
+                // A failed periodic checkpoint is recoverable: skip this round instead of terminating the
+                // connector, and let the next scheduled checkpoint retry with the latest acked position.
+                log.error("Checkpoint for shard {} failed after {} attempts at {}. Skipping this round; "
+                        + "will retry on the next interval.", kinesisShardId, numRetries, checkpoint, e);
+                scheduleNextCheckpoint();
             } else {
                 log.warn("Throttling/Dependency error on checkpoint for shard {} at {}. Scheduling retry {} "
                                 + "after {}ms.", kinesisShardId, checkpoint, attempt + 1, backoffTime);
-                checkpointExecutor.schedule(() -> tryCheckpointWithRetry(checkpointer, checkpoint, attempt + 1),
-                        backoffTime, TimeUnit.MILLISECONDS);
+                safeSchedule(() -> tryCheckpointWithRetry(checkpointer, checkpoint, attempt + 1), backoffTime);
             }
         } catch (Exception e) {
-            log.error("Caught a non-retryable exception for shard {} during checkpoint at {}. Terminating.",
-                    kinesisShardId, checkpoint, e);
-            sourceContext.fatal(e);
+            // Non-retryable errors (e.g. KCL's IllegalArgumentException when an out-of-order ack tries to
+            // checkpoint a position behind the last checkpoint) must NOT crash the connector. Skip this
+            // round; a later ack with a higher position will advance the checkpoint on a subsequent cycle.
+            log.error("Non-retryable exception during checkpoint for shard {} at {}. Skipping this round; "
+                    + "will retry on the next interval.", kinesisShardId, checkpoint, e);
+            scheduleNextCheckpoint();
+        }
+    }
+
+    private void scheduleNextCheckpoint() {
+        isCheckpointing.set(false);
+        safeSchedule(this::triggerCheckpoint, checkpointInterval);
+    }
+
+    private void safeSchedule(Runnable task, long delayMillis) {
+        try {
+            checkpointExecutor.schedule(task, delayMillis, TimeUnit.MILLISECONDS);
+        } catch (RejectedExecutionException e) {
+            // The checkpoint executor has been shut down (connector is closing); nothing left to schedule.
+            log.debug("Checkpoint executor rejected a task for shard {} (likely shutting down).", kinesisShardId);
         }
     }
 
@@ -116,7 +134,7 @@ public class KinesisRecordProcessor implements ShardRecordProcessor {
         log.info("Initializing KinesisRecordProcessor for shard {}, extendedSequenceNumber: {}, pendingCheckSeq: {}",
                 kinesisShardId, initializationInput.extendedSequenceNumber(),
                 initializationInput.pendingCheckpointSequenceNumber());
-        checkpointExecutor.schedule(this::triggerCheckpoint, checkpointInterval, TimeUnit.MILLISECONDS);
+        safeSchedule(this::triggerCheckpoint, checkpointInterval);
     }
 
     private void triggerCheckpoint() {
@@ -128,13 +146,15 @@ public class KinesisRecordProcessor implements ShardRecordProcessor {
                         lastCheckpointSequenceNumber)) {
                     tryCheckpointWithRetry(checkpointer, currentCheckpoint, 1);
                 } else {
-                    isCheckpointing.set(false);
-                    checkpointExecutor.schedule(this::triggerCheckpoint, checkpointInterval, TimeUnit.MILLISECONDS);
+                    scheduleNextCheckpoint();
                 }
             }
         } catch (Throwable e) {
-            log.error("Error while triggering checkpoint for shard {}. Terminating.", kinesisShardId, e);
-            sourceContext.fatal(e);
+            // Defensive: never let a checkpoint-trigger failure crash the connector. Keep the loop alive
+            // so the next scheduled cycle can make progress.
+            log.error("Unexpected error while triggering checkpoint for shard {}. Skipping this round.",
+                    kinesisShardId, e);
+            scheduleNextCheckpoint();
         }
     }
 
@@ -203,8 +223,9 @@ public class KinesisRecordProcessor implements ShardRecordProcessor {
                 }
             }
         } catch (Exception e) {
+            // Defensive: a failed final checkpoint must not crash the connector. Under at-least-once
+            // semantics the un-checkpointed records will simply be reprocessed by the next lease owner.
             log.error("Failed to perform final checkpoint for shard {}. Data may be reprocessed.", kinesisShardId, e);
-            sourceContext.fatal(e);
         }
     }
 
