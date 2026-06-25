@@ -60,9 +60,10 @@ public class KinesisRecordProcessor implements ShardRecordProcessor {
     private String kinesisShardId;
     private final AtomicInteger numRecordsInFlight = new AtomicInteger(0);
 
-    // All checkpoint-position state below is guarded by checkpointLock. Acks arrive on multiple Kafka I/O
-    // threads, processRecords runs on the KCL thread, and triggerCheckpoint runs on the checkpointExecutor
-    // thread, so the deque/set/highest-acked triple must be mutated atomically as a group.
+    // All checkpoint-position state below is guarded by checkpointLock. Acks arrive concurrently on the
+    // downstream sink's send-completion callback threads, processRecords runs on the KCL thread, and
+    // triggerCheckpoint runs on the checkpointExecutor thread, so the deque/set/highest-acked triple must
+    // be mutated atomically as a group.
     private final Object checkpointLock = new Object();
     // Positions appended in processRecords, in KCL delivery (sequence) order.
     private final ArrayDeque<CheckpointSequenceNumber> deliveredInOrder = new ArrayDeque<>();

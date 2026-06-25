@@ -145,7 +145,7 @@ public class KinesisSourceConfig extends BaseKinesisConfig implements Serializab
     private transient Set<String> propertiesToInclude;
 
     /**
-     * Determines which value is used as the Pulsar/Kafka message key for each Kinesis record.
+     * Determines which value is used as the Pulsar message key for each Kinesis record.
      */
     public enum MessageKeyMode {
         /**
@@ -163,7 +163,7 @@ public class KinesisSourceConfig extends BaseKinesisConfig implements Serializab
     @FieldDoc(
         required = false,
         defaultValue = "PARTITION_KEY",
-        help = "Which value to use as the Pulsar/Kafka message key for each record. "
+        help = "Which value to use as the Pulsar message key for each record. "
                 + "PARTITION_KEY (default) uses the Kinesis record partition key (preserves existing downstream "
                 + "partitioning). SHARD_ID routes all records of a Kinesis shard to the same key, keeping them on "
                 + "one downstream partition to preserve per-shard ordering and reduce checkpoint reordering/gap; "
