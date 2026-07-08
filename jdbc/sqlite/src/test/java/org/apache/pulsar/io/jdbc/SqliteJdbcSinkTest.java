@@ -22,8 +22,10 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.withSettings;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Maps;
 import java.sql.PreparedStatement;
@@ -38,6 +40,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import lombok.AllArgsConstructor;
 import lombok.Data;
@@ -45,6 +48,7 @@ import lombok.NoArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.avro.util.Utf8;
 import org.apache.commons.lang3.reflect.FieldUtils;
+import org.apache.commons.lang3.reflect.MethodUtils;
 import org.apache.pulsar.client.api.Message;
 import org.apache.pulsar.client.api.Schema;
 import org.apache.pulsar.client.api.schema.GenericObject;
@@ -446,6 +450,102 @@ public class SqliteJdbcSinkTest {
 
         futureByEntries1.get(1, TimeUnit.SECONDS);
         futureByEntries2.get(1, TimeUnit.SECONDS);
+    }
+
+    /**
+     * Regression test for a StackOverflowError in {@code JdbcAbstractSink.flush()}.
+     *
+     * <p>flush() used to drain "another round" by calling itself recursively
+     * ({@code if (needAnotherRound) { flush(); }}). Under sustained catch-up a single
+     * flush() invocation has to drain many queued batches, so the recursion depth grew
+     * with the backlog and eventually threw StackOverflowError. Because the handler only
+     * caught Exception (not Throwable), that Error escaped: the scheduled flush executor
+     * swallowed it and cancelled the periodic flush, and the sink hung silently while
+     * still reporting healthy.
+     *
+     * <p>This test freezes flushing, queues a large backlog, then lets a single flush()
+     * drain all of it. With {@code batchSize=1} the drain performs one round per record,
+     * so the backlog size equals the old recursion depth. The insert statement is replaced
+     * with a no-op mock (as in {@code testFatalCalledOnFlushException}) so the drain
+     * exercises the flush control flow at high volume without real database I/O. The
+     * iterative implementation completes and acks every record; the recursive one
+     * overflowed the stack. fatal() must never be invoked.
+     */
+    @Test
+    public void testFlushDrainsLargeBacklogWithoutStackOverflow() throws Exception {
+        jdbcSink.close();
+        jdbcSink = null;
+
+        // Large enough that the old one-frame-per-batch recursion overflows a default
+        // thread stack with margin, even when the test runner uses a bigger -Xss.
+        final int recordCount = 50_000;
+
+        Map<String, Object> conf = Maps.newHashMap();
+        conf.put("jdbcUrl", sqliteUtils.sqliteUri());
+        conf.put("tableName", tableName);
+        conf.put("key", "field3");
+        conf.put("nonKey", "field1,field2");
+        // One record per flush round, so the number of rounds equals the backlog size.
+        conf.put("batchSize", 1);
+        // Disable the time-based flush; the only drain is the one we trigger explicitly.
+        conf.put("timeoutMs", 0);
+        // Unbounded queue so enqueuing the whole backlog never applies back-pressure.
+        conf.put("maxQueueSize", -1);
+
+        SinkContext mockSinkContext = mock(SinkContext.class);
+        SqliteJdbcAutoSchemaSink sink = new SqliteJdbcAutoSchemaSink();
+        try {
+            sink.open(conf, mockSinkContext);
+
+            // Replace the insert statement with a no-op so a large drain stays fast and
+            // deterministic; this test exercises flush()'s control flow, not the database.
+            PreparedStatement noopStatement = mock(PreparedStatement.class);
+            FieldUtils.writeField(sink, "insertStatement", noopStatement, true);
+
+            // Freeze draining so every write just accumulates the backlog.
+            FieldUtils.writeField(sink, "isFlushing", new AtomicBoolean(true), true);
+
+            // The recursion depended on the queue depth, not on record contents, so a
+            // single record enqueued many times is enough (and keeps the test cheap).
+            AtomicLong acked = new AtomicLong();
+            AtomicLong failed = new AtomicLong();
+            AvroSchema<Foo> schema = AvroSchema.of(SchemaDefinition.<Foo>builder()
+                    .withPojo(Foo.class).withAlwaysAllowNull(true).build());
+            AutoConsumeSchema autoConsumeSchema = new AutoConsumeSchema();
+            autoConsumeSchema.setSchema(schema);
+            GenericAvroSchema genericAvroSchema = new GenericAvroSchema(schema.getSchemaInfo());
+            byte[] bytes = schema.encode(new Foo("f1", "f2", 1));
+            Map<String, String> insertProps = Maps.newHashMap();
+            insertProps.put("ACTION", "INSERT");
+            Message<GenericRecord> message = mock(MessageImpl.class, withSettings().stubOnly());
+            when(message.getValue()).thenReturn(genericAvroSchema.decode(bytes));
+            when(message.getProperties()).thenReturn(insertProps);
+            Record<? extends GenericObject> builtRecord = PulsarRecord.<GenericRecord>builder()
+                    .message(message)
+                    .topicName("fake_topic_name")
+                    .schema(autoConsumeSchema)
+                    .ackFunction(acked::incrementAndGet)
+                    .failFunction(failed::incrementAndGet)
+                    .build();
+            @SuppressWarnings("unchecked")
+            Record<GenericObject> record = (Record<GenericObject>) builtRecord;
+
+            for (int i = 0; i < recordCount; i++) {
+                sink.write(record);
+            }
+
+            // Release the backlog and force a single flush() to drain all of it.
+            FieldUtils.writeField(sink, "isFlushing", new AtomicBoolean(false), true);
+            MethodUtils.invokeMethod(sink, true, "flush");
+
+            Awaitility.await().atMost(60, TimeUnit.SECONDS)
+                    .untilAsserted(() -> Assert.assertEquals(acked.get(), recordCount));
+            Assert.assertEquals(failed.get(), 0L);
+            // The Error path must not have been hit at all.
+            verify(mockSinkContext, never()).fatal(any(Throwable.class));
+        } finally {
+            sink.close();
+        }
     }
 
     @DataProvider(name = "useTransactions")
