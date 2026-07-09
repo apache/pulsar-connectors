@@ -184,12 +184,11 @@ public class DynamoDBSourceConfig implements Serializable {
     public AmazonDynamoDBStreams buildDynamoDBStreamsClient(AwsCredentialProviderPlugin credPlugin) {
         AmazonDynamoDBStreamsClientBuilder builder = AmazonDynamoDBStreamsClientBuilder.standard();
 
-        // EndpointConfiguration already carries the signing region, and the AWS SDK v1 forbids
-        // setting both an endpoint configuration and a region, so they must be mutually exclusive.
         if (!this.getAwsEndpoint().isEmpty()) {
             builder.setEndpointConfiguration(
                     new AwsClientBuilder.EndpointConfiguration(this.getAwsEndpoint(), this.getAwsRegion()));
-        } else if (!this.getAwsRegion().isEmpty()) {
+        }
+        if (!this.getAwsRegion().isEmpty()) {
             builder.setRegion(this.getAwsRegion());
         }
         builder.setCredentials(credPlugin.getCredentialProvider());
@@ -199,10 +198,11 @@ public class DynamoDBSourceConfig implements Serializable {
     public AmazonDynamoDB buildDynamoDBClient(AwsCredentialProviderPlugin credPlugin) {
         AmazonDynamoDBClientBuilder builder = AmazonDynamoDBClientBuilder.standard();
 
-        if (!this.getDynamoEndpoint().isEmpty()) {
+        if (!this.getAwsEndpoint().isEmpty()) {
             builder.setEndpointConfiguration(
                     new AwsClientBuilder.EndpointConfiguration(this.getDynamoEndpoint(), this.getAwsRegion()));
-        } else if (!this.getAwsRegion().isEmpty()) {
+        }
+        if (!this.getAwsRegion().isEmpty()) {
             builder.setRegion(this.getAwsRegion());
         }
         builder.setCredentials(credPlugin.getCredentialProvider());
@@ -212,10 +212,11 @@ public class DynamoDBSourceConfig implements Serializable {
     public AmazonCloudWatch buildCloudwatchClient(AwsCredentialProviderPlugin credPlugin) {
         AmazonCloudWatchClientBuilder builder = AmazonCloudWatchClientBuilder.standard();
 
-        if (!this.getCloudwatchEndpoint().isEmpty()) {
+        if (!this.getAwsEndpoint().isEmpty()) {
             builder.setEndpointConfiguration(
                     new AwsClientBuilder.EndpointConfiguration(this.getCloudwatchEndpoint(), this.getAwsRegion()));
-        } else if (!this.getAwsRegion().isEmpty()) {
+        }
+        if (!this.getAwsRegion().isEmpty()) {
             builder.setRegion(this.getAwsRegion());
         }
         builder.setCredentials(credPlugin.getCredentialProvider());
