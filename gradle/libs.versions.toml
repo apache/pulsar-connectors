@@ -461,6 +461,7 @@ elasticsearch-java = { module = "co.elastic.clients:elasticsearch-java", version
 debezium-bom = { module = "io.debezium:debezium-bom", version.ref = "debezium" }
 debezium-core = { module = "io.debezium:debezium-core" }
 debezium-connector-mysql = { module = "io.debezium:debezium-connector-mysql" }
+debezium-connector-mariadb = { module = "io.debezium:debezium-connector-mariadb" }
 debezium-connector-mongodb = { module = "io.debezium:debezium-connector-mongodb" }
 debezium-connector-postgres = { module = "io.debezium:debezium-connector-postgres" }
 debezium-connector-oracle = { module = "io.debezium:debezium-connector-oracle" }
