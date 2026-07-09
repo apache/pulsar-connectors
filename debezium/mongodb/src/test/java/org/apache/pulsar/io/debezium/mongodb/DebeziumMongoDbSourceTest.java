@@ -16,16 +16,16 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-package org.apache.pulsar.io.debezium.postgres;
+package org.apache.pulsar.io.debezium.mongodb;
 
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertNotNull;
-import java.sql.Connection;
-import java.sql.DriverManager;
-import java.sql.Statement;
+import com.mongodb.client.MongoClient;
+import com.mongodb.client.MongoClients;
+import com.mongodb.client.MongoCollection;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
@@ -38,7 +38,8 @@ import org.apache.pulsar.client.api.PulsarClient;
 import org.apache.pulsar.common.schema.KeyValue;
 import org.apache.pulsar.functions.api.Record;
 import org.apache.pulsar.io.core.SourceContext;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.bson.Document;
+import org.testcontainers.containers.MongoDBContainer;
 import org.testcontainers.containers.PulsarContainer;
 import org.testcontainers.utility.DockerImageName;
 import org.testng.annotations.AfterMethod;
@@ -46,34 +47,29 @@ import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
 
 @Slf4j
-public class DebeziumPostgresSourceTest {
+public class DebeziumMongoDbSourceTest {
 
     private static final String PULSAR_IMAGE =
             System.getenv().getOrDefault("PULSAR_TEST_IMAGE", "apachepulsar/pulsar:4.1.3");
 
-    /** Rows seeded before open(), each of which the initial snapshot must emit. */
+    /** Documents seeded before open(), each of which the initial snapshot must emit. */
     private static final int EXPECTED_RECORDS = 2;
 
     private static final int READ_TIMEOUT_SECONDS = 120;
 
-    private PostgreSQLContainer<?> postgresContainer;
+    private MongoDBContainer mongoContainer;
     private PulsarContainer pulsarContainer;
     private PulsarClient pulsarClient;
-    private DebeziumPostgresSource source;
+    private DebeziumMongoDbSource source;
     private ExecutorService readerExecutor;
 
     @BeforeMethod
     public void setup() throws Exception {
         readerExecutor = Executors.newSingleThreadExecutor();
-        postgresContainer = new PostgreSQLContainer<>(DockerImageName.parse("postgres:16"))
-                .withDatabaseName("testdb")
-                .withUsername("debezium")
-                .withPassword("dbz")
-                .withCommand("postgres",
-                        "-c", "wal_level=logical",
-                        "-c", "max_wal_senders=4",
-                        "-c", "max_replication_slots=4");
-        postgresContainer.start();
+        // MongoDBContainer starts a single-node replica set, which Debezium requires
+        // for change streams.
+        mongoContainer = new MongoDBContainer(DockerImageName.parse("mongo:7.0"));
+        mongoContainer.start();
 
         pulsarContainer = new PulsarContainer(DockerImageName.parse(PULSAR_IMAGE));
         pulsarContainer.start();
@@ -82,19 +78,14 @@ public class DebeziumPostgresSourceTest {
                 .serviceUrl(pulsarContainer.getPulsarBrokerUrl())
                 .build();
 
-        // Create test table and insert initial data
-        try (Connection conn = DriverManager.getConnection(
-                postgresContainer.getJdbcUrl(), postgresContainer.getUsername(), postgresContainer.getPassword());
-             Statement stmt = conn.createStatement()) {
-            stmt.execute("CREATE TABLE products ("
-                    + "id SERIAL PRIMARY KEY, "
-                    + "name VARCHAR(255) NOT NULL, "
-                    + "description VARCHAR(512))");
-            stmt.execute("INSERT INTO products (name, description) VALUES ('widget', 'A small widget')");
-            stmt.execute("INSERT INTO products (name, description) VALUES ('gadget', 'A fancy gadget')");
+        // Create test collection and insert initial data
+        try (MongoClient client = MongoClients.create(mongoContainer.getConnectionString())) {
+            MongoCollection<Document> products = client.getDatabase("testdb").getCollection("products");
+            products.insertOne(new Document("name", "widget").append("description", "A small widget"));
+            products.insertOne(new Document("name", "gadget").append("description", "A fancy gadget"));
         }
 
-        source = new DebeziumPostgresSource();
+        source = new DebeziumMongoDbSource();
     }
 
     @AfterMethod(alwaysRun = true)
@@ -116,13 +107,13 @@ public class DebeziumPostgresSourceTest {
         if (pulsarContainer != null) {
             pulsarContainer.stop();
         }
-        if (postgresContainer != null) {
-            postgresContainer.stop();
+        if (mongoContainer != null) {
+            mongoContainer.stop();
         }
     }
 
     @Test(timeOut = 600_000)
-    public void testPostgresCdcEvents() throws Exception {
+    public void testMongoDbCdcEvents() throws Exception {
         String pulsarServiceUrl = pulsarContainer.getPulsarBrokerUrl();
 
         SourceContext sourceContext = mock(SourceContext.class);
@@ -131,23 +122,18 @@ public class DebeziumPostgresSourceTest {
                 PulsarClient.builder().serviceUrl(pulsarServiceUrl));
         when(sourceContext.getTenant()).thenReturn("public");
         when(sourceContext.getNamespace()).thenReturn("default");
-        when(sourceContext.getSourceName()).thenReturn("debezium-postgres-test");
+        when(sourceContext.getSourceName()).thenReturn("debezium-mongodb-test");
         when(sourceContext.getSecret(anyString())).thenReturn(null);
 
         Map<String, Object> config = new HashMap<>();
-        config.put("database.hostname", postgresContainer.getHost());
-        config.put("database.port", String.valueOf(postgresContainer.getMappedPort(5432)));
-        config.put("database.user", postgresContainer.getUsername());
-        config.put("database.password", postgresContainer.getPassword());
-        config.put("database.dbname", "testdb");
-        config.put("topic.prefix", "dbserver1");
-        config.put("plugin.name", "pgoutput");
-        config.put("schema.history.internal.pulsar.service.url", pulsarServiceUrl);
+        config.put("mongodb.connection.string", mongoContainer.getConnectionString());
+        config.put("topic.prefix", "mongodb1");
+        config.put("collection.include.list", "testdb.products");
 
         source.open(config, sourceContext);
 
         // Debezium performs an initial snapshot of existing data.
-        // We should receive CDC records for the 2 rows we inserted.
+        // We should receive CDC records for the 2 documents we inserted.
         int received = 0;
         for (int i = 0; i < EXPECTED_RECORDS; i++) {
             Record<KeyValue<byte[], byte[]>> record = readOne();

@@ -16,18 +16,4 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-
-plugins {
-    id("pulsar-connectors.java-conventions")
-    id("pulsar-connectors.nar-conventions")
-}
-dependencies {
-    implementation(libs.pulsar.io.core)
-    implementation(project(":debezium:pulsar-io-debezium-core"))
-    implementation(libs.debezium.connector.mongodb)
-
-    testImplementation(libs.testcontainers.mongodb)
-    testImplementation(libs.testcontainers.pulsar)
-    testImplementation(libs.pulsar.client)
-    testImplementation(libs.mongodb.driver.sync)
-}
+package org.apache.pulsar.io.debezium.mariadb;

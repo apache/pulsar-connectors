@@ -24,10 +24,9 @@ plugins {
 dependencies {
     implementation(libs.pulsar.io.core)
     implementation(project(":debezium:pulsar-io-debezium-core"))
-    implementation(libs.debezium.connector.mongodb)
+    implementation(libs.debezium.connector.mariadb)
 
-    testImplementation(libs.testcontainers.mongodb)
+    testImplementation(libs.testcontainers)
     testImplementation(libs.testcontainers.pulsar)
     testImplementation(libs.pulsar.client)
-    testImplementation(libs.mongodb.driver.sync)
 }
