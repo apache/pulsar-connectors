@@ -46,8 +46,8 @@ import org.testng.annotations.Test;
  *
  * <p><b>TODO:</b> These tests verify the offset converters work in isolation but don't test the
  * actual production code path - that {@link AbstractKafkaConnectSource#open} uses these JSON
- * converters for offset storage. Once pulsar-broker test artifacts are available, replace these
- * with an E2E test that: (1) initializes the adaptor with AvroConverter for data topics,
+ * converters for offset storage. Once pulsar-broker test artifacts are available, add a new
+ * E2E test that: (1) initializes the adaptor with AvroConverter for data topics,
  * (2) processes a message and stores an offset, (3) simulates a restart with fresh converter
  * instances, and (4) verifies the offset was loaded correctly. This would prove the production
  * path uses JSON converters for offsets regardless of data converter configuration.
