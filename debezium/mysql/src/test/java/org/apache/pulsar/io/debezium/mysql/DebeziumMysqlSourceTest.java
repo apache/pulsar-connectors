@@ -67,7 +67,11 @@ public class DebeziumMysqlSourceTest {
 
     @BeforeMethod
     public void setup() throws Exception {
-        readerExecutor = Executors.newSingleThreadExecutor();
+readerExecutor = Executors.newSingleThreadExecutor(r -> {
+    Thread t = new Thread(r, "debezium-mysql-test-reader");
+    t.setDaemon(true);
+    return t;
+});
         // Use GenericContainer instead of MySQLContainer to get full root access
         // which is required for Debezium's REPLICATION SLAVE/CLIENT privileges
         mysqlContainer = new GenericContainer<>(DockerImageName.parse("mysql:8.0"))
