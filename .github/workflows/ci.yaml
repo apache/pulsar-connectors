@@ -71,7 +71,7 @@ jobs:
       matrix:
         include:
           - name: Connectors
-            tasks: test
+            tasks: test integrationTest
     steps:
       - uses: actions/checkout@v6
 
