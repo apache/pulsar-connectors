@@ -29,6 +29,7 @@ dependencies {
     implementation(project(":aerospike"))
     implementation(project(":canal"))
     implementation(project(":cassandra"))
+    implementation(project(":debezium:pulsar-io-debezium-mariadb"))
     implementation(project(":debezium:pulsar-io-debezium-mysql"))
     implementation(project(":debezium:pulsar-io-debezium-postgres"))
     implementation(project(":debezium:pulsar-io-debezium-mongodb"))
