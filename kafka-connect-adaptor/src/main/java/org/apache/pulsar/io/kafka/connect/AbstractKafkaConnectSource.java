@@ -20,6 +20,7 @@ package org.apache.pulsar.io.kafka.connect;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
+import com.google.common.annotations.VisibleForTesting;
 import io.confluent.connect.avro.AvroConverter;
 import io.confluent.kafka.schemaregistry.client.MockSchemaRegistryClient;
 import io.confluent.kafka.serializers.AbstractKafkaSchemaSerDeConfig;
@@ -38,6 +39,8 @@ import lombok.Getter;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.connect.connector.Task;
 import org.apache.kafka.connect.errors.ConnectException;
+import org.apache.kafka.connect.json.JsonConverter;
+import org.apache.kafka.connect.json.JsonConverterConfig;
 import org.apache.kafka.connect.runtime.TaskConfig;
 import org.apache.kafka.connect.source.SourceConnector;
 import org.apache.kafka.connect.source.SourceRecord;
@@ -114,6 +117,10 @@ public abstract class AbstractKafkaConnectSource<T> implements Source<T> {
         keyConverter.configure(config, true);
         valueConverter.configure(config, false);
 
+        // initialize offset converters
+        Converter offsetKeyConverter = createOffsetConverter(true);
+        Converter offsetValueConverter = createOffsetConverter(false);
+
         offsetStore = new PulsarOffsetBackingStore(sourceContext.getPulsarClient());
         PulsarKafkaWorkerConfig pulsarKafkaWorkerConfig = new PulsarKafkaWorkerConfig(stringConfig);
         offsetStore.configure(pulsarKafkaWorkerConfig);
@@ -122,14 +129,14 @@ public abstract class AbstractKafkaConnectSource<T> implements Source<T> {
         offsetReader = new OffsetStorageReaderImpl(
                 offsetStore,
                 "pulsar-kafka-connect-adaptor",
-                keyConverter,
-                valueConverter
+                offsetKeyConverter,
+                offsetValueConverter
         );
         offsetWriter = new OffsetStorageWriter(
                 offsetStore,
                 "pulsar-kafka-connect-adaptor",
-                keyConverter,
-                valueConverter
+                offsetKeyConverter,
+                offsetValueConverter
         );
 
         sourceTaskContext = new PulsarIOSourceTaskContext(offsetReader, pulsarKafkaWorkerConfig);
@@ -165,6 +172,19 @@ public abstract class AbstractKafkaConnectSource<T> implements Source<T> {
         sourceTask.initialize(sourceTaskContext);
         sourceTask.start(taskConfig);
     }
+
+    /**
+     * Creates a converter for offset (de)serialization. Offsets are always stored as schema-less
+     * JSON, independently of the converters configured for the data topics — the same hardcoded
+     * behavior as Kafka Connect's internal converters (see KIP-174).
+     */
+    @VisibleForTesting
+    static Converter createOffsetConverter(boolean isKey) {
+        Converter converter = new JsonConverter();
+        converter.configure(Map.of(JsonConverterConfig.SCHEMAS_ENABLE_CONFIG, false), isKey);
+        return converter;
+    }
+
     private void onOffsetsFlushed(Throwable error, CompletableFuture<Void> snapshotFlushFuture) {
         if (error != null) {
             log.error("Failed to flush offsets to storage: ", error);
