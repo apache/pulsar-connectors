@@ -62,8 +62,17 @@ dependencies {
     testImplementation(libs.netty.reactive.streams)
 }
 
-// KCA tests depend on pulsar-broker internals that have changed since the
-// last released version. Tests will compile once matching pulsar artifacts
-// are published. Skip for now to unblock CI.
-tasks.named("compileTestJava") { enabled = false }
-tasks.named("test") { enabled = false }
+// Some KCA tests depend on pulsar-broker internals that have changed since the
+// last released version. Those tests will compile once matching pulsar artifacts
+// are published; exclude only them for now so that self-contained unit tests
+// still compile and run in CI.
+val brokerDependentTestSources = listOf(
+    "**/KafkaConnectSinkTest.java",
+    "**/KafkaConnectSourceErrRecTest.java",
+    "**/KafkaConnectSourceErrTest.java",
+    "**/KafkaConnectSourceTest.java",
+    "**/PulsarOffsetBackingStoreTest.java",
+)
+tasks.named<JavaCompile>("compileTestJava") {
+    exclude(brokerDependentTestSources)
+}
