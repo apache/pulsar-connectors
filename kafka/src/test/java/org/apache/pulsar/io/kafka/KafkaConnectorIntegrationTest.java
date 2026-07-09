@@ -150,8 +150,7 @@ public class KafkaConnectorIntegrationTest {
         assertEquals(actual.size(), expected.size(), "unexpected number of records in Kafka topic");
         for (Map.Entry<String, byte[]> entry : expected.entrySet()) {
             assertTrue(actual.containsKey(entry.getKey()), "missing key " + entry.getKey());
-            assertEquals(new String(actual.get(entry.getKey()), StandardCharsets.UTF_8),
-                    new String(entry.getValue(), StandardCharsets.UTF_8),
+            assertEquals(actual.get(entry.getKey()), entry.getValue(),
                     "payload mismatch for key " + entry.getKey());
         }
     }
