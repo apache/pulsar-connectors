@@ -24,4 +24,9 @@ plugins {
 dependencies {
     implementation(project(":jdbc:pulsar-io-jdbc-core"))
     runtimeOnly(libs.clickhouse.jdbc)
+
+    testImplementation(libs.testcontainers.clickhouse)
+    testImplementation(libs.pulsar.client)
+    testImplementation(libs.pulsar.functions.instance)
+    testImplementation(libs.avro)
 }
