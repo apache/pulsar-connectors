@@ -41,6 +41,32 @@ public class ProcessedFileThreadTest extends AbstractFileTest {
     private ProcessedFileThread cleanupThread;
     private FileSourceConfig fileConfig;
 
+    /**
+     * Waits (bounded) until every produced file has made it through the entire pipeline,
+     * including the final rename/delete performed by the cleanup thread. Checking only the
+     * queues is not enough: a file is briefly in none of them while it is handed from one
+     * thread to the next, and the last hop (disk rename/delete) happens after the file has
+     * already left the queues.
+     */
+    private void awaitProcessingComplete() throws InterruptedException {
+        long deadline = System.currentTimeMillis() + 60_000;
+        while (!processingComplete()) {
+            if (System.currentTimeMillis() >= deadline) {
+                fail("Pipeline did not drain within 60s: workQueue=" + workQueue.size()
+                        + ", inProcess=" + inProcess.size()
+                        + ", recentlyProcessed=" + recentlyProcessed.size()
+                        + ", files still on disk="
+                        + producedFiles.stream().filter(File::exists).count());
+            }
+            Thread.sleep(200);
+        }
+    }
+
+    private boolean processingComplete() {
+        return workQueue.isEmpty() && inProcess.isEmpty() && recentlyProcessed.isEmpty()
+                && producedFiles.stream().noneMatch(File::exists);
+    }
+
     @Test
     public final void singleFileTest() throws IOException {
 
@@ -186,10 +212,8 @@ public class ProcessedFileThreadTest extends AbstractFileTest {
             // Stop producing files
             generatorThread.halt();
 
-            // Let the consumer catch up
-            while (!workQueue.isEmpty() && !inProcess.isEmpty() && !recentlyProcessed.isEmpty()) {
-                Thread.sleep(2000);
-            }
+            // Let the pipeline finish processing every produced file
+            awaitProcessingComplete();
 
             // Make sure every single file was processed.
             for (File produced : producedFiles) {
@@ -241,10 +265,8 @@ public class ProcessedFileThreadTest extends AbstractFileTest {
             // Stop producing files
             generatorThread.halt();
 
-            // Let the consumer catch up
-            while (!workQueue.isEmpty() && !inProcess.isEmpty() && !recentlyProcessed.isEmpty()) {
-                Thread.sleep(2000);
-            }
+            // Let the pipeline finish processing every produced file
+            awaitProcessingComplete();
 
             // Make sure every single file was processed exactly once.
             for (File produced : producedFiles) {
@@ -293,10 +315,8 @@ public class ProcessedFileThreadTest extends AbstractFileTest {
             // Stop producing files
             generatorThread.halt();
 
-            // Let the consumer catch up
-            while (!workQueue.isEmpty() && !inProcess.isEmpty() && !recentlyProcessed.isEmpty()) {
-                Thread.sleep(2000);
-            }
+            // Let the pipeline finish processing every produced file
+            awaitProcessingComplete();
 
 
             // Make sure every single file was processed.
