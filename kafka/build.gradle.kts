@@ -48,4 +48,6 @@ dependencies {
     testImplementation(libs.hamcrest)
     testImplementation(libs.awaitility)
     testImplementation(libs.bcpkix.jdk18on)
+    testImplementation(libs.testcontainers)
+    testImplementation(libs.testcontainers.kafka)
 }
