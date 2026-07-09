@@ -25,4 +25,8 @@ dependencies {
     implementation(libs.pulsar.io.core)
     implementation(project(":debezium:pulsar-io-debezium-core"))
     implementation(libs.debezium.connector.sqlserver)
+
+    testImplementation(libs.testcontainers.mssqlserver)
+    testImplementation(libs.testcontainers.pulsar)
+    testImplementation(libs.pulsar.client)
 }
