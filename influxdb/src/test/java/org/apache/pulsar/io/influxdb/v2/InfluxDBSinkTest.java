@@ -35,6 +35,7 @@ import java.time.Instant;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 import lombok.Data;
 import org.apache.avro.util.Utf8;
 import org.apache.pulsar.client.api.Message;
@@ -49,6 +50,7 @@ import org.apache.pulsar.client.impl.schema.generic.GenericAvroSchema;
 import org.apache.pulsar.client.impl.schema.generic.GenericSchemaImpl;
 import org.apache.pulsar.functions.api.Record;
 import org.apache.pulsar.functions.source.PulsarRecord;
+import org.awaitility.Awaitility;
 import org.mockito.ArgumentCaptor;
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
@@ -179,8 +181,11 @@ public class InfluxDBSinkTest {
         influxSink.write(record);
         verify(writeApi, times(0)).writePoints(anyList());
         influxSink.write(record);
-        Thread.sleep(100);
-        verify(writeApi, times(1)).writePoints(anyList());
+        // The sink flushes on a background executor once batchSize records are queued; waiting a
+        // fixed 100ms raced with it and failed intermittently under CI load.
+        Awaitility.await()
+                .atMost(30, TimeUnit.SECONDS)
+                .untilAsserted(() -> verify(writeApi, times(1)).writePoints(anyList()));
 
         ArgumentCaptor<List<Point>> captor = ArgumentCaptor.forClass(List.class);
         verify(writeApi).writePoints(captor.capture());
