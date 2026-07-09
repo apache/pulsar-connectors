@@ -109,9 +109,12 @@ public class FileListingTask implements Runnable {
                             // The file stays tracked until the cleanup thread renames or
                             // deletes it, which closes the windows where a file is on disk
                             // but in none of the downstream queues.
+                            // Track the file only once the queue has accepted it: a bounded
+                            // workQueue rejects offers when full, and a file recorded as
+                            // offered but never enqueued would never be retried.
                             for (File f: listing) {
-                                if (alreadyOffered.add(f)) {
-                                    workQueue.offer(f);
+                                if (!alreadyOffered.contains(f) && workQueue.offer(f)) {
+                                    alreadyOffered.add(f);
                                 }
                             }
                         }
