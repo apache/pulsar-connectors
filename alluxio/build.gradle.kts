@@ -34,7 +34,7 @@ pulsarConnectorsDependencies {
 
 dependencies {
     // Alluxio-compatible BOMs — these override the shared platform versions.
-    implementation(enforcedPlatform(libs.jetty9.bom))
+    implementation(enforcedPlatform(libs.jetty9.bom.override))
     implementation(enforcedPlatform("io.netty:netty-bom:4.1.100.Final"))
     implementation(enforcedPlatform("io.grpc:grpc-bom:1.37.0"))
 

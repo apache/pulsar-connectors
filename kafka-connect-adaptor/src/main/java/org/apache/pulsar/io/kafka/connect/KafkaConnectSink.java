@@ -98,18 +98,10 @@ public class KafkaConnectSink implements Sink<GenericObject> {
     // Thi is a workaround for https://github.com/apache/pulsar/issues/19922
     private boolean collapsePartitionedTopics = false;
 
-    private final Cache<String, String> sanitizedTopicCache =
-            CacheBuilder.newBuilder().maximumSize(1000)
-                    .expireAfterAccess(30, TimeUnit.MINUTES).build();
-
-    // Can't really safely expire these entries.  If we do, we could end up with
-    // a sanitized topic name that used in e.g. resume() after a long pause but can't be
-    // // re-resolved into a form usable for Pulsar.
-    private final Cache<String, String> desanitizedTopicCache =
-            CacheBuilder.newBuilder().build();
-
     private int maxBatchBitsForOffset = 12;
     private boolean useIndexAsOffset = true;
+
+    private TopicPartitionResolver topicPartitionResolver;
 
     @Override
     public void write(Record<GenericObject> sourceRecord) {
@@ -198,19 +190,15 @@ public class KafkaConnectSink implements Sink<GenericObject> {
             x.put(PulsarKafkaWorkerConfig.OFFSET_STORAGE_TOPIC_CONFIG, kafkaSinkConfig.getOffsetStorageTopic());
         });
         task = (SinkTask) taskClass.getConstructor().newInstance();
+
+        topicPartitionResolver = new TopicPartitionResolver(
+                topicName,
+                sanitizeTopicName,
+                collapsePartitionedTopics);
+
         taskContext =
-                new PulsarKafkaSinkTaskContext(configs.get(0), ctx, task::open, kafkaName -> {
-                    if (sanitizeTopicName) {
-                        String pulsarTopicName = desanitizedTopicCache.getIfPresent(kafkaName);
-                        if (log.isDebugEnabled()) {
-                            log.debug("desanitizedTopicCache got: kafkaName: {}, pulsarTopicName: {}",
-                                    kafkaName, pulsarTopicName);
-                        }
-                        return pulsarTopicName != null ? pulsarTopicName : kafkaName;
-                    } else {
-                        return kafkaName;
-                    }
-                });
+                new PulsarKafkaSinkTaskContext(configs.get(0), ctx, task::open,
+                        topicPartitionResolver::desanitizeTopicName);
         task.initialize(taskContext);
         task.start(configs.get(0));
 
@@ -264,6 +252,10 @@ public class KafkaConnectSink implements Sink<GenericObject> {
             ackUntil(lastNotFlushed, committedOffsets, Record::ack);
             log.info("Flush succeeded");
         } catch (Throwable t) {
+            if (committedOffsets == null) {
+                log.error("preCommit failed — retrying to preserve ordering", t);
+                return;
+            }
             log.error("error flushing pending records", t);
             ackUntil(lastNotFlushed, committedOffsets, Record::fail);
         } finally {
@@ -300,13 +292,13 @@ public class KafkaConnectSink implements Sink<GenericObject> {
             partitionOffset.put(tp.partition(), e.getValue().offset());
         }
 
+        int ackRequestedCount = 0;
         for (Record<GenericObject> r : pendingFlushQueue) {
-            final String topic = sanitizeNameIfNeeded(r.getTopicName().orElse(topicName), sanitizeTopicName);
-            final int partition = r.getPartitionIndex().orElse(0);
+            ResolvedTopicPartition resolved = topicPartitionResolver.resolve(r);
 
             Long lastCommittedOffset = null;
-            if (topicOffsets.containsKey(topic)) {
-                lastCommittedOffset = topicOffsets.get(topic).get(partition);
+            if (topicOffsets.containsKey(resolved.getTopic())) {
+                lastCommittedOffset = topicOffsets.get(resolved.getTopic()).get(resolved.getPartition());
             }
 
             if (lastCommittedOffset == null) {
@@ -326,15 +318,20 @@ public class KafkaConnectSink implements Sink<GenericObject> {
             }
 
             cb.accept(r);
+            ackRequestedCount++;
             pendingFlushQueue.remove(r);
             currentBatchSize.addAndGet(-1 * r.getMessage().get().size());
             if (r == lastNotFlushed) {
                 break;
             }
         }
+        if (log.isDebugEnabled()) {
+            log.debug("ackRequestedCount: {}, committedOffsets: {}", ackRequestedCount, committedOffsets);
+        }
     }
 
-    private long getMessageOffset(Record<GenericObject> sourceRecord) {
+    @VisibleForTesting
+    long getMessageOffset(Record<GenericObject> sourceRecord) {
 
         if (sourceRecord.getMessage().isPresent()) {
             // Use index added by org.apache.pulsar.common.intercept.AppendIndexMetadataInterceptor if present.
@@ -383,12 +380,105 @@ public class KafkaConnectSink implements Sink<GenericObject> {
                 .orElse(-1L);
     }
 
+    @VisibleForTesting
+    TopicPartitionResolver getTopicPartitionResolver() {
+        return topicPartitionResolver;
+    }
+
     @Getter
     @AllArgsConstructor
     static class BatchMessageSequenceRef {
         long ledgerId;
         long entryId;
         int batchIdx;
+    }
+
+    @Getter
+    @AllArgsConstructor
+    static class ResolvedTopicPartition {
+        private final String topic;
+        private final int partition;
+    }
+
+    static class TopicPartitionResolver {
+        private final String topicName;
+        private final boolean sanitizeTopicName;
+        private final boolean collapsePartitionedTopics;
+        private final Cache<String, String> sanitizedTopicCache =
+                CacheBuilder.newBuilder().maximumSize(1000)
+                        .expireAfterAccess(30, TimeUnit.MINUTES).build();
+
+        // Can't really safely expire these entries.  If we do, we could end up with
+        // a sanitized topic name that is used in e.g. resume() after a long pause but can't be
+        // re-resolved into a form usable for Pulsar.
+        private final Cache<String, String> desanitizedTopicCache =
+                CacheBuilder.newBuilder().build();
+
+        private TopicPartitionResolver(String topicName,
+                                       boolean sanitizeTopicName,
+                                       boolean collapsePartitionedTopics) {
+            this.topicName = topicName;
+            this.sanitizeTopicName = sanitizeTopicName;
+            this.collapsePartitionedTopics = collapsePartitionedTopics;
+        }
+
+        private ResolvedTopicPartition resolve(Record<GenericObject> sourceRecord) {
+            final int partition;
+            final String topic;
+
+            if (shouldCollapsePartitionedTopic(sourceRecord)) {
+                TopicName tn = TopicName.get(sourceRecord.getTopicName().get());
+                partition = tn.getPartitionIndex();
+                topic = sanitizeNameIfNeeded(tn.getPartitionedTopicName());
+            } else {
+                partition = sourceRecord.getPartitionIndex().orElse(0);
+                topic = sanitizeNameIfNeeded(sourceRecord.getTopicName().orElse(topicName));
+            }
+            return new ResolvedTopicPartition(topic, partition);
+        }
+
+        private String desanitizeTopicName(String kafkaName) {
+            if (sanitizeTopicName) {
+                String pulsarTopicName = desanitizedTopicCache.getIfPresent(kafkaName);
+                if (log.isDebugEnabled()) {
+                    log.debug("desanitizedTopicCache got: kafkaName: {}, pulsarTopicName: {}",
+                            kafkaName, pulsarTopicName);
+                }
+                return pulsarTopicName != null ? pulsarTopicName : kafkaName;
+            } else {
+                return kafkaName;
+            }
+        }
+
+        // Replace all non-letter, non-digit characters with underscore.
+        // Append underscore in front of name if it does not begin with alphabet or underscore.
+        String sanitizeNameIfNeeded(String name) {
+            if (!sanitizeTopicName) {
+                return name;
+            }
+
+            try {
+                return sanitizedTopicCache.get(name, () -> {
+                    String sanitizedName = name.replaceAll("[^a-zA-Z0-9_]", "_");
+                    if (sanitizedName.matches("^[^a-zA-Z_].*")) {
+                        sanitizedName = "_" + sanitizedName;
+                    }
+                    // do this once, sanitize() can be called on already sanitized name
+                    // so avoid replacing with (sanitizedName -> sanitizedName).
+                    desanitizedTopicCache.get(sanitizedName, () -> name);
+                    return sanitizedName;
+                });
+            } catch (ExecutionException e) {
+                log.error("Failed to get sanitized topic name for {}", name, e);
+                throw new IllegalStateException("Failed to get sanitized topic name for " + name, e);
+            }
+        }
+
+        private boolean shouldCollapsePartitionedTopic(Record<GenericObject> r) {
+            return collapsePartitionedTopics
+                    && r.getTopicName().isPresent()
+                    && TopicName.get(r.getTopicName().get()).isPartitioned();
+        }
     }
 
     private static Method getMethodOfMessageId(MessageId messageId, String name) throws NoSuchMethodException {
@@ -437,19 +527,11 @@ public class KafkaConnectSink implements Sink<GenericObject> {
 
     @SuppressWarnings("rawtypes")
     protected SinkRecord toSinkRecord(Record<GenericObject> sourceRecord) {
-        final int partition;
-        final String topic;
 
-        if (collapsePartitionedTopics
-                && sourceRecord.getTopicName().isPresent()
-                && TopicName.get(sourceRecord.getTopicName().get()).isPartitioned()) {
-            TopicName tn = TopicName.get(sourceRecord.getTopicName().get());
-            partition = tn.getPartitionIndex();
-            topic = sanitizeNameIfNeeded(tn.getPartitionedTopicName(), sanitizeTopicName);
-        } else {
-            partition = sourceRecord.getPartitionIndex().orElse(0);
-            topic = sanitizeNameIfNeeded(sourceRecord.getTopicName().orElse(topicName), sanitizeTopicName);
-        }
+        ResolvedTopicPartition resolved = topicPartitionResolver.resolve(sourceRecord);
+        final int partition = resolved.getPartition();
+        final String topic = resolved.getTopic();
+
         final Object key;
         final Object value;
         final Schema keySchema;
@@ -522,31 +604,6 @@ public class KafkaConnectSink implements Sink<GenericObject> {
 
     @VisibleForTesting
     protected long currentOffset(String topic, int partition) {
-        return taskContext.currentOffset(sanitizeNameIfNeeded(topic, sanitizeTopicName), partition);
+        return taskContext.currentOffset(topicPartitionResolver.sanitizeNameIfNeeded(topic), partition);
     }
-
-    // Replace all non-letter, non-digit characters with underscore.
-    // Append underscore in front of name if it does not begin with alphabet or underscore.
-    protected String sanitizeNameIfNeeded(String name, boolean sanitize) {
-        if (!sanitize) {
-            return name;
-        }
-
-        try {
-            return sanitizedTopicCache.get(name, () -> {
-                String sanitizedName = name.replaceAll("[^a-zA-Z0-9_]", "_");
-                if (sanitizedName.matches("^[^a-zA-Z_].*")) {
-                    sanitizedName = "_" + sanitizedName;
-                }
-                // do this once, sanitize() can be called on already sanitized name
-                // so avoid replacing with (sanitizedName -> sanitizedName).
-                desanitizedTopicCache.get(sanitizedName, () -> name);
-                return sanitizedName;
-            });
-        } catch (ExecutionException e) {
-            log.error("Failed to get sanitized topic name for {}", name, e);
-            throw new IllegalStateException("Failed to get sanitized topic name for " + name, e);
-        }
-    }
-
 }
