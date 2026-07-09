@@ -44,6 +44,15 @@ public class FileListingThread extends Thread {
     private final AtomicLong queueLastUpdated = new AtomicLong(0L);
     private final Lock listingLock = new ReentrantLock();
     private final AtomicReference<FileFilter> fileFilterRef = new AtomicReference<>();
+
+    /**
+     * Files that have already been offered to the work queue and still exist on disk.
+     * Only accessed by this thread. Consulting the downstream queues instead is racy:
+     * a file is briefly in none of them while the consumer moves it between queues, and
+     * again while the cleanup thread renames/deletes it, so a listing pass in one of
+     * those windows would offer the same file twice.
+     */
+    private final Set<File> alreadyOffered = new HashSet<>();
     private final BlockingQueue<File> workQueue;
     private final BlockingQueue<File> inProcess;
     private final BlockingQueue<File> recentlyProcessed;
@@ -72,20 +81,37 @@ public class FileListingThread extends Thread {
         while (true) {
             if ((queueLastUpdated.get() < System.currentTimeMillis() - pollingInterval) && listingLock.tryLock()) {
                 try {
+                    // Prune tracked files that are gone from disk (processed and then renamed or
+                    // deleted). This must happen before the listing snapshot: a file that
+                    // disappears between the prune and the listing cannot be in the listing, so
+                    // it can never be re-offered through a stale tracking entry.
+                    if (!keepOriginal) {
+                        alreadyOffered.removeIf(f -> !f.exists());
+                    }
+
                     final File directory = new File(inputDir);
                     final Set<File> listing = performListing(directory, fileFilterRef.get(), recurseDirs);
 
                     if (listing != null && !listing.isEmpty()) {
 
-                        // Remove any files that have been or are currently being processed.
-                        listing.removeAll(inProcess);
-                        if (!keepOriginal) {
-                            listing.removeAll(recentlyProcessed);
-                        }
-
-                        for (File f: listing) {
-                            if (!workQueue.contains(f)) {
-                                workQueue.offer(f);
+                        if (keepOriginal) {
+                            // Re-processing the same file is expected in keepFile mode: only
+                            // skip files that are currently queued or being processed.
+                            listing.removeAll(inProcess);
+                            for (File f: listing) {
+                                if (!workQueue.contains(f)) {
+                                    workQueue.offer(f);
+                                }
+                            }
+                        } else {
+                            // Offer each file exactly once for as long as it remains on disk.
+                            // The file stays tracked until the cleanup thread renames or
+                            // deletes it, which closes the windows where a file is on disk
+                            // but in none of the downstream queues.
+                            for (File f: listing) {
+                                if (alreadyOffered.add(f)) {
+                                    workQueue.offer(f);
+                                }
                             }
                         }
                         queueLastUpdated.set(System.currentTimeMillis());
