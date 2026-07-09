@@ -50,11 +50,21 @@ public class ProcessedFileThreadTest extends AbstractFileTest {
      */
     private void awaitProcessingComplete() throws InterruptedException {
         long deadline = System.currentTimeMillis() + 60_000;
-        while (System.currentTimeMillis() < deadline
-                && (!workQueue.isEmpty() || !inProcess.isEmpty() || !recentlyProcessed.isEmpty()
-                        || producedFiles.stream().anyMatch(File::exists))) {
+        while (!processingComplete()) {
+            if (System.currentTimeMillis() >= deadline) {
+                fail("Pipeline did not drain within 60s: workQueue=" + workQueue.size()
+                        + ", inProcess=" + inProcess.size()
+                        + ", recentlyProcessed=" + recentlyProcessed.size()
+                        + ", files still on disk="
+                        + producedFiles.stream().filter(File::exists).count());
+            }
             Thread.sleep(200);
         }
+    }
+
+    private boolean processingComplete() {
+        return workQueue.isEmpty() && inProcess.isEmpty() && recentlyProcessed.isEmpty()
+                && producedFiles.stream().noneMatch(File::exists);
     }
 
     @Test
