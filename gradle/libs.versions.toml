@@ -169,7 +169,7 @@ kafka-client = "4.1.1"
 confluent = "8.1.1"
 opensearch = "2.19.4"
 elasticsearch-java = "8.15.3"
-debezium = "3.4.2.Final"
+debezium = "3.4.3.Final"
 kubernetesclient = "23.0.0"
 # IO connector specific
 aerospike-client = "4.5.0"
@@ -423,6 +423,7 @@ testcontainers-localstack = { module = "org.testcontainers:localstack" }
 testcontainers-rabbitmq = { module = "org.testcontainers:rabbitmq" }
 testcontainers-kafka = { module = "org.testcontainers:kafka" }
 testcontainers-mysql = { module = "org.testcontainers:mysql" }
+testcontainers-mariadb = { module = "org.testcontainers:mariadb" }
 testcontainers-clickhouse = { module = "org.testcontainers:clickhouse" }
 testcontainers-postgresql = { module = "org.testcontainers:postgresql" }
 testcontainers-mongodb = { module = "org.testcontainers:mongodb" }
