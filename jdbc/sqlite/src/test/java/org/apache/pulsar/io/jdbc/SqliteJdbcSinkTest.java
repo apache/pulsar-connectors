@@ -31,6 +31,7 @@ import com.google.common.collect.Maps;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.util.Arrays;
+import java.util.Deque;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -463,10 +464,10 @@ public class SqliteJdbcSinkTest {
      * swallowed it and cancelled the periodic flush, and the sink hung silently while
      * still reporting healthy.
      *
-     * <p>This test freezes flushing, queues a large backlog, then lets a single flush()
-     * drain all of it. With {@code batchSize=1} the drain performs one round per record,
-     * so the backlog size equals the old recursion depth. The insert statement is replaced
-     * with a no-op mock (as in {@code testFatalCalledOnFlushException}) so the drain
+     * <p>This test seeds a large backlog straight onto the sink's queue, then lets a single
+     * flush() drain all of it. With {@code batchSize=1} the drain performs one round per
+     * record, so the backlog size equals the old recursion depth. The insert statement is
+     * replaced with a no-op mock (as in {@code testFatalCalledOnFlushException}) so the drain
      * exercises the flush control flow at high volume without real database I/O. The
      * iterative implementation completes and acks every record; the recursive one
      * overflowed the stack. fatal() must never be invoked.
@@ -487,10 +488,8 @@ public class SqliteJdbcSinkTest {
         conf.put("nonKey", "field1,field2");
         // One record per flush round, so the number of rounds equals the backlog size.
         conf.put("batchSize", 1);
-        // Disable the time-based flush; the only drain is the one we trigger explicitly.
+        // No periodic flush task is scheduled, so the only drain is the one we invoke below.
         conf.put("timeoutMs", 0);
-        // Unbounded queue so enqueuing the whole backlog never applies back-pressure.
-        conf.put("maxQueueSize", -1);
 
         SinkContext mockSinkContext = mock(SinkContext.class);
         SqliteJdbcAutoSchemaSink sink = new SqliteJdbcAutoSchemaSink();
@@ -501,9 +500,6 @@ public class SqliteJdbcSinkTest {
             // deterministic; this test exercises flush()'s control flow, not the database.
             PreparedStatement noopStatement = mock(PreparedStatement.class);
             FieldUtils.writeField(sink, "insertStatement", noopStatement, true);
-
-            // Freeze draining so every write just accumulates the backlog.
-            FieldUtils.writeField(sink, "isFlushing", new AtomicBoolean(true), true);
 
             // The recursion depended on the queue depth, not on record contents, so a
             // single record enqueued many times is enough (and keeps the test cheap).
@@ -530,16 +526,24 @@ public class SqliteJdbcSinkTest {
             @SuppressWarnings("unchecked")
             Record<GenericObject> record = (Record<GenericObject>) builtRecord;
 
-            for (int i = 0; i < recordCount; i++) {
-                sink.write(record);
+            // Seed the backlog directly on the sink's queue. Going through write() would
+            // schedule one flush task per record (batchSize=1), which is slow and races with
+            // the explicit flush() below. This test is about how flush() drains a deep queue,
+            // so seeding the queue keeps it fast and fully deterministic.
+            @SuppressWarnings("unchecked")
+            Deque<Record<GenericObject>> incomingList =
+                    (Deque<Record<GenericObject>>) FieldUtils.readField(sink, "incomingList", true);
+            synchronized (incomingList) {
+                for (int i = 0; i < recordCount; i++) {
+                    incomingList.add(record);
+                }
             }
 
-            // Release the backlog and force a single flush() to drain all of it.
-            FieldUtils.writeField(sink, "isFlushing", new AtomicBoolean(false), true);
+            // Nothing else can flush, so this single call must drain the entire backlog
+            // synchronously: one round per record.
             MethodUtils.invokeMethod(sink, true, "flush");
 
-            Awaitility.await().atMost(60, TimeUnit.SECONDS)
-                    .untilAsserted(() -> Assert.assertEquals(acked.get(), recordCount));
+            Assert.assertEquals(acked.get(), recordCount);
             Assert.assertEquals(failed.get(), 0L);
             // The Error path must not have been hit at all.
             verify(mockSinkContext, never()).fatal(any(Throwable.class));

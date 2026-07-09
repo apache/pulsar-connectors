@@ -379,9 +379,12 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
                     // is surfaced to the framework via fatal() and the instance is terminated and
                     // restarted, instead of the flush thread dying silently while the pod keeps
                     // reporting healthy.
-                    log.error("Got exception {} after {} ms, failing {} messages",
-                            e.getMessage(),
-                            (System.nanoTime() - start) / 1000 / 1000,
+                    // Log toString() rather than getMessage(): an Error such as
+                    // StackOverflowError usually carries no message, which would render as
+                    // "null" and hide what actually failed.
+                    log.error("Got throwable {} after {} ms, failing {} messages",
+                            e.toString(),
+                            TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start),
                             swapList.size(),
                             e);
                     swapList.forEach(Record::fail);
