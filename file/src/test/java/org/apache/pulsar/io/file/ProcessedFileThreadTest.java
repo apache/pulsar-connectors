@@ -80,10 +80,10 @@ public class ProcessedFileThreadTest extends AbstractFileTest {
         try {
             generateFiles(1);
             fileConfig = FileSourceConfig.load(map);
-            listingThread = new FileListingThread(fileConfig, workQueue, inProcess, recentlyProcessed);
+            listingTask = new FileListingTask(fileConfig, workQueue, inProcess, recentlyProcessed);
             consumerThread = new FileConsumerThread(consumer, workQueue, inProcess, recentlyProcessed);
             cleanupThread = new ProcessedFileThread(fileConfig, recentlyProcessed);
-            executor.execute(listingThread);
+            executor.execute(listingTask);
             executor.execute(consumerThread);
             executor.execute(cleanupThread);
             Thread.sleep(2000);
@@ -119,10 +119,10 @@ public class ProcessedFileThreadTest extends AbstractFileTest {
         try {
             generateFiles(50);
             fileConfig = FileSourceConfig.load(map);
-            listingThread = new FileListingThread(fileConfig, workQueue, inProcess, recentlyProcessed);
+            listingTask = new FileListingTask(fileConfig, workQueue, inProcess, recentlyProcessed);
             consumerThread = new FileConsumerThread(consumer, workQueue, inProcess, recentlyProcessed);
             cleanupThread = new ProcessedFileThread(fileConfig, recentlyProcessed);
-            executor.execute(listingThread);
+            executor.execute(listingTask);
             executor.execute(consumerThread);
             executor.execute(cleanupThread);
             Thread.sleep(2000);
@@ -160,10 +160,10 @@ public class ProcessedFileThreadTest extends AbstractFileTest {
         try {
             generateFiles(1);
             fileConfig = FileSourceConfig.load(map);
-            listingThread = new FileListingThread(fileConfig, workQueue, inProcess, recentlyProcessed);
+            listingTask = new FileListingTask(fileConfig, workQueue, inProcess, recentlyProcessed);
             consumerThread = new FileConsumerThread(consumer, workQueue, inProcess, recentlyProcessed);
             cleanupThread = new ProcessedFileThread(fileConfig, recentlyProcessed);
-            executor.execute(listingThread);
+            executor.execute(listingTask);
             executor.execute(consumerThread);
             executor.execute(cleanupThread);
             Thread.sleep(7900);  // Should pull the same file 5 times?
@@ -199,10 +199,10 @@ public class ProcessedFileThreadTest extends AbstractFileTest {
                     directory.toString(), "continuous", ".txt", getPermissions());
             executor.execute(generatorThread);
 
-            listingThread = new FileListingThread(fileConfig, workQueue, inProcess, recentlyProcessed);
+            listingTask = new FileListingTask(fileConfig, workQueue, inProcess, recentlyProcessed);
             consumerThread = new FileConsumerThread(consumer, workQueue, inProcess, recentlyProcessed);
             cleanupThread = new ProcessedFileThread(fileConfig, recentlyProcessed);
-            executor.execute(listingThread);
+            executor.execute(listingTask);
             executor.execute(consumerThread);
             executor.execute(cleanupThread);
 
@@ -246,14 +246,14 @@ public class ProcessedFileThreadTest extends AbstractFileTest {
                     directory.toString(), "continuous", ".txt", getPermissions());
             executor.execute(generatorThread);
 
-            listingThread = new FileListingThread(fileConfig, workQueue, inProcess, recentlyProcessed);
+            listingTask = new FileListingTask(fileConfig, workQueue, inProcess, recentlyProcessed);
             consumerThread = new FileConsumerThread(consumer, workQueue, inProcess, recentlyProcessed);
             FileConsumerThread consumerThread2 = new FileConsumerThread(consumer, workQueue, inProcess,
                     recentlyProcessed);
             FileConsumerThread consumerThread3 = new FileConsumerThread(consumer, workQueue, inProcess,
                     recentlyProcessed);
             cleanupThread = new ProcessedFileThread(fileConfig, recentlyProcessed);
-            executor.execute(listingThread);
+            executor.execute(listingTask);
             executor.execute(consumerThread);
             executor.execute(consumerThread2);
             executor.execute(consumerThread3);
@@ -302,10 +302,10 @@ public class ProcessedFileThreadTest extends AbstractFileTest {
                             "continuous", ".txt", getPermissions());
             executor.execute(generatorThread);
 
-            listingThread = new FileListingThread(fileConfig, workQueue, inProcess, recentlyProcessed);
+            listingTask = new FileListingTask(fileConfig, workQueue, inProcess, recentlyProcessed);
             consumerThread = new FileConsumerThread(consumer, workQueue, inProcess, recentlyProcessed);
             cleanupThread = new ProcessedFileThread(fileConfig, recentlyProcessed);
-            executor.execute(listingThread);
+            executor.execute(listingTask);
             executor.execute(consumerThread);
             executor.execute(cleanupThread);
 
