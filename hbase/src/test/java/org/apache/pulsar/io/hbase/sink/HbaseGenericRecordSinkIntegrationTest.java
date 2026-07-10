@@ -163,19 +163,20 @@ public class HbaseGenericRecordSinkIntegrationTest {
             sink.write(fooRecord(obj));
 
             // The sink flushes on a background executor; poll for the row rather than racing it.
-            Table table = connection.getTable(TableName.valueOf(TABLE_NAME));
-            Awaitility.await().atMost(60, TimeUnit.SECONDS).pollInterval(500, TimeUnit.MILLISECONDS)
-                    .until(() -> !table.get(new Get(Bytes.toBytes(obj.getRowKey()))).isEmpty());
+            try (Table table = connection.getTable(TableName.valueOf(TABLE_NAME))) {
+                Awaitility.await().atMost(60, TimeUnit.SECONDS).pollInterval(500, TimeUnit.MILLISECONDS)
+                        .until(() -> !table.get(new Get(Bytes.toBytes(obj.getRowKey()))).isEmpty());
 
-            Result result = table.get(new Get(Bytes.toBytes(obj.getRowKey())));
-            assertEquals(Bytes.toString(result.getValue(Bytes.toBytes(FAMILY_NAME), Bytes.toBytes("name"))),
-                    "name_value");
-            assertEquals(Bytes.toString(result.getValue(Bytes.toBytes(FAMILY_NAME), Bytes.toBytes("address"))),
-                    "address_value");
+                Result result = table.get(new Get(Bytes.toBytes(obj.getRowKey())));
+                assertEquals(Bytes.toString(result.getValue(Bytes.toBytes(FAMILY_NAME), Bytes.toBytes("name"))),
+                        "name_value");
+                assertEquals(Bytes.toString(result.getValue(Bytes.toBytes(FAMILY_NAME), Bytes.toBytes("address"))),
+                        "address_value");
 
-            // Non-vacuous guard: a row that was never written must not be present.
-            assertTrue(table.get(new Get(Bytes.toBytes("never_written_row"))).isEmpty(),
-                    "a row that was never written should not be found");
+                // Non-vacuous guard: a row that was never written must not be present.
+                assertTrue(table.get(new Get(Bytes.toBytes("never_written_row"))).isEmpty(),
+                        "a row that was never written should not be found");
+            }
         } finally {
             sink.close();
         }
