@@ -40,4 +40,6 @@ dependencies {
     implementation(libs.hbase.client)
     implementation(libs.hbase.common)
     implementation("io.opentelemetry.semconv:opentelemetry-semconv:1.29.0-alpha")
+
+    testImplementation(libs.testcontainers)
 }
