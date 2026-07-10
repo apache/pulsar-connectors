@@ -19,9 +19,11 @@
 package org.apache.pulsar.io.hdfs3.sink.seq;
 
 import static org.mockito.Mockito.times;
+import java.util.concurrent.TimeUnit;
 import static org.mockito.Mockito.verify;
 import static org.testng.Assert.assertNotNull;
 import org.apache.pulsar.io.hdfs3.sink.AbstractHdfsSinkTest;
+import org.awaitility.Awaitility;
 import org.testng.SkipException;
 import org.testng.annotations.Test;
 
@@ -43,8 +45,9 @@ public class HdfsTextSinkTest extends AbstractHdfsSinkTest<String, String> {
         assertNotNull(mockRecord);
         send(100);
 
-        Thread.sleep(2000);
-        verify(mockRecord, times(100)).ack();
+        // The sink syncs on a background interval; poll rather than racing it.
+        Awaitility.await().atMost(60, TimeUnit.SECONDS)
+                .untilAsserted(() -> verify(mockRecord, times(100)).ack());
         sink.close();
     }
 
@@ -59,8 +62,9 @@ public class HdfsTextSinkTest extends AbstractHdfsSinkTest<String, String> {
         assertNotNull(mockRecord);
         send(5000);
 
-        Thread.sleep(2000);
-        verify(mockRecord, times(5000)).ack();
+        // The sink syncs on a background interval; poll rather than racing it.
+        Awaitility.await().atMost(60, TimeUnit.SECONDS)
+                .untilAsserted(() -> verify(mockRecord, times(5000)).ack());
         sink.close();
     }
 
