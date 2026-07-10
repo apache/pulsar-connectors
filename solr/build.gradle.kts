@@ -49,4 +49,5 @@ dependencies {
 
     testImplementation(libs.solr.test.framework)
     testImplementation(libs.solr.core)
+    testImplementation(libs.testcontainers)
 }

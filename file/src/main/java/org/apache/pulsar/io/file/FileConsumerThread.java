@@ -56,10 +56,9 @@ public class FileConsumerThread extends Thread {
             while (true) {
                 File file = workQueue.take();
 
-                boolean added = false;
-                do {
-                    added = inProcess.add(file);
-                } while (!added);
+                // put(), not add(): add() throws IllegalStateException on a bounded queue that is
+                // full, which would kill this worker. Blocking applies back-pressure instead.
+                inProcess.put(file);
 
                 consumeFile(file);
             }
@@ -68,7 +67,7 @@ public class FileConsumerThread extends Thread {
         }
     }
 
-    private void consumeFile(File file) {
+    private void consumeFile(File file) throws InterruptedException {
         final AtomicInteger idx = new AtomicInteger(1);
         try (Stream<String> lines = getLines(file)) {
              lines.forEachOrdered(line -> process(file, idx.getAndIncrement(), line));
@@ -81,10 +80,8 @@ public class FileConsumerThread extends Thread {
                 removed = inProcess.remove(file);
             } while (!removed);
 
-            boolean added = false;
-            do {
-                added = recentlyProcessed.add(file);
-            } while (!added);
+            // put(), not add(): see the comment in run().
+            recentlyProcessed.put(file);
         }
     }
 
