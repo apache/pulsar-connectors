@@ -25,6 +25,7 @@ import static org.testng.Assert.assertTrue;
 import com.hivemq.client.mqtt.MqttClient;
 import com.hivemq.client.mqtt.mqtt5.Mqtt5AsyncClient;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.BlockingQueue;
@@ -37,6 +38,7 @@ import org.apache.pulsar.io.core.SinkContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.testcontainers.containers.GenericContainer;
+import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.utility.DockerImageName;
 import org.testng.annotations.AfterClass;
 import org.testng.annotations.BeforeClass;
@@ -51,7 +53,11 @@ public class MqttSinkIntegrationTest {
     private static final DockerImageName MOSQUITTO_IMAGE = DockerImageName.parse("eclipse-mosquitto:2");
 
     private final GenericContainer<?> mqttContainer = new GenericContainer<>(MOSQUITTO_IMAGE)
-            .withExposedPorts(MQTT_PORT);
+            .withExposedPorts(MQTT_PORT)
+            // Without an explicit wait strategy and startup timeout, a stalled image pull hangs
+            // @BeforeClass with no bound, taking the whole CI job to its 45-minute limit.
+            .waitingFor(Wait.forListeningPort())
+            .withStartupTimeout(Duration.ofMinutes(3));
 
     @BeforeClass(alwaysRun = true)
     public void beforeClass() {
@@ -63,7 +69,7 @@ public class MqttSinkIntegrationTest {
         mqttContainer.stop();
     }
 
-    @Test
+    @Test(timeOut = 120_000)
     public void testWriteE2EWithMosquitto() throws Exception {
         BlockingQueue<String> receivedPayloads = new LinkedBlockingQueue<>();
         CountDownLatch ackLatch = new CountDownLatch(3);
