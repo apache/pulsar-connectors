@@ -25,8 +25,10 @@ plugins {
 // The hadoop-minicluster used by the sink integration test embeds an HDFS namenode whose HTTP
 // server requires Jetty 9.x, while the shared platform enforces Jetty 12.x (which removed classes
 // such as HandlerWrapper). Drop the Jetty 12 BOM from the enforced platform so the Jetty 9.x
-// override below can apply. This affects the test classpath only; the connector itself is an HDFS
-// client and never loads Jetty at runtime.
+// override below can apply. This customizes the enforced platform on the module's implementation
+// configuration, so it affects main compile/runtime resolution as well as tests — but the
+// connector is an HDFS client that never loads Jetty, so no Jetty ends up on the runtime classpath
+// either way; the change only unblocks the mini cluster's Jetty 9.x on the test classpath.
 pulsarConnectorsDependencies {
     exclude(libs.jetty.bom)
 }

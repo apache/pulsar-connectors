@@ -59,6 +59,7 @@ import org.testng.annotations.Test;
  *
  * <p>No Docker container is required — {@code MiniDFSCluster} runs entirely inside the test JVM.
  */
+@lombok.extern.slf4j.Slf4j
 public class HdfsSinkIntegrationTest {
 
     private static final String DIRECTORY = "/hdfs-sink-integration-test";
@@ -116,6 +117,9 @@ public class HdfsSinkIntegrationTest {
         config.put("filenamePrefix", FILENAME_PREFIX);
         config.put("fileExtension", FILE_EXTENSION);
         config.put("separator", SEPARATOR);
+        // Encode explicitly as UTF-8 so the write side matches the UTF-8 decode in readSinkOutput()
+        // regardless of the JVM's default charset (the sink otherwise uses Charset.defaultCharset()).
+        config.put("encoding", "UTF-8");
         // Let the background sync thread flush and ack on a modest interval.
         config.put("syncInterval", 200L);
 
@@ -124,31 +128,46 @@ public class HdfsSinkIntegrationTest {
 
         HdfsStringSink sink = new HdfsStringSink();
         sink.open(config, sinkContext);
-        for (String value : values) {
-            sink.write(mockRecord(value, ackCount));
+        // close() must run even if an assertion below fails, otherwise the non-daemon
+        // HdfsSyncThread keeps running and can stop the test JVM from terminating cleanly.
+        boolean closed = false;
+        try {
+            for (String value : values) {
+                sink.write(mockRecord(value, ackCount));
+            }
+
+            // Wait until every record has been acked. The sink acks a record only after its
+            // background sync thread has hsync'd the stream, which also guarantees the sink's
+            // unacked-record queue has drained — so the subsequent close() flushes the writer and
+            // commits the file cleanly instead of racing an hsync against an already-closed stream.
+            await().atMost(60, TimeUnit.SECONDS).pollInterval(200, TimeUnit.MILLISECONDS)
+                    .untilAsserted(() -> Assert.assertEquals(ackCount.get(), values.size(),
+                            "all records should be acknowledged by the sink"));
+
+            // close() flushes the buffered writer and commits the file to HDFS.
+            sink.close();
+            closed = true;
+
+            // Build the content we expect on HDFS: each value followed by the separator.
+            StringBuilder expected = new StringBuilder();
+            for (String value : values) {
+                expected.append(value).append(SEPARATOR);
+            }
+
+            // Read the committed file back from the mini cluster's filesystem and assert it matches.
+            String actual = readSinkOutput();
+            Assert.assertEquals(actual, expected.toString(),
+                    "content read back from HDFS must match what was written to the sink");
+        } finally {
+            if (!closed) {
+                // Best-effort cleanup on a failure path; the real assertion has already thrown.
+                try {
+                    sink.close();
+                } catch (Exception e) {
+                    log.warn("Failed to close sink on the error path", e);
+                }
+            }
         }
-
-        // Wait until every record has been acked. The sink acks a record only after its background
-        // sync thread has hsync'd the stream, which also guarantees the sink's unacked-record queue
-        // has drained — so the subsequent close() flushes the writer and commits the file cleanly
-        // instead of racing an hsync against an already-closed stream.
-        await().atMost(60, TimeUnit.SECONDS).pollInterval(200, TimeUnit.MILLISECONDS)
-                .untilAsserted(() -> Assert.assertEquals(ackCount.get(), values.size(),
-                        "all records should be acknowledged by the sink"));
-
-        // close() flushes the buffered writer and commits the file to HDFS.
-        sink.close();
-
-        // Build the exact content we expect to find on HDFS: each value followed by the separator.
-        StringBuilder expected = new StringBuilder();
-        for (String value : values) {
-            expected.append(value).append(SEPARATOR);
-        }
-
-        // Read the committed file back from the mini cluster's own filesystem and assert it matches.
-        String actual = readSinkOutput();
-        Assert.assertEquals(actual, expected.toString(),
-                "content read back from HDFS must match what was written to the sink");
     }
 
     /**
