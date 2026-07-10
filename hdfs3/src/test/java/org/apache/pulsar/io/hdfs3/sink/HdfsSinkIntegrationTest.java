@@ -155,7 +155,7 @@ public class HdfsSinkIntegrationTest {
             }
 
             // Read the committed file back from the mini cluster's filesystem and assert it matches.
-            String actual = readSinkOutput();
+            String actual = readSinkOutput(DIRECTORY);
             Assert.assertEquals(actual, expected.toString(),
                     "content read back from HDFS must match what was written to the sink");
         } finally {
@@ -171,12 +171,62 @@ public class HdfsSinkIntegrationTest {
     }
 
     /**
-     * Reads and concatenates the content of every file produced by the sink under {@link #DIRECTORY}
-     * on the mini cluster's filesystem. The sink writes all records from a single {@code open()} into
-     * one file whose name starts with {@link #FILENAME_PREFIX}.
+     * Regression test for the close ordering bug: closing the sink while records are still unacked
+     * must flush and commit them, not throw. The old {@code writer.close()} before the superclass'
+     * final {@code hsync()} closed the stream first, so {@code hsync()} threw {@code
+     * ClosedChannelException} whenever the sync thread had not yet drained the queue at close time.
      */
-    private String readSinkOutput() throws Exception {
-        Path dir = new Path(DIRECTORY);
+    @Test(timeOut = 300_000)
+    public void testCloseWithUnackedRecordsCommitsInsteadOfThrowing() throws Exception {
+        String directory = "/hdfs-sink-close-ordering-test";
+        List<String> values = new ArrayList<>();
+        for (int i = 0; i < 25; i++) {
+            values.add("close-record-" + i);
+        }
+
+        Map<String, Object> config = new HashMap<>();
+        config.put("hdfsConfigResources", coreSite.getAbsolutePath());
+        config.put("directory", directory);
+        config.put("filenamePrefix", FILENAME_PREFIX);
+        config.put("fileExtension", FILE_EXTENSION);
+        config.put("separator", SEPARATOR);
+        config.put("encoding", "UTF-8");
+        // A sync interval long enough that the background thread does not tick before we close()
+        // (writes take milliseconds), so close() runs the final hsync()/ack path with records still
+        // queued — the bug scenario. Kept modest because close() joins the sync thread, which sleeps
+        // this long before exiting.
+        config.put("syncInterval", 5_000L);
+
+        SinkContext sinkContext = mock(SinkContext.class);
+        AtomicInteger ackCount = new AtomicInteger(0);
+
+        HdfsStringSink sink = new HdfsStringSink();
+        sink.open(config, sinkContext);
+        for (String value : values) {
+            sink.write(mockRecord(value, ackCount));
+        }
+
+        // Under the old ordering this threw ClosedChannelException; it must now commit cleanly.
+        sink.close();
+
+        Assert.assertEquals(ackCount.get(), values.size(),
+                "close() should have flushed and acked every queued record");
+
+        StringBuilder expected = new StringBuilder();
+        for (String value : values) {
+            expected.append(value).append(SEPARATOR);
+        }
+        Assert.assertEquals(readSinkOutput(directory), expected.toString(),
+                "records written before close() must be committed to HDFS");
+    }
+
+    /**
+     * Reads and concatenates the content of every file the sink produced under {@code directory}
+     * on the mini cluster's filesystem, matching files whose name starts with
+     * {@link #FILENAME_PREFIX}.
+     */
+    private String readSinkOutput(String directory) throws Exception {
+        Path dir = new Path(directory);
         if (!clusterFs.exists(dir)) {
             return "";
         }
