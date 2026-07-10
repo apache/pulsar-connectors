@@ -24,4 +24,9 @@ plugins {
 dependencies {
     implementation(project(":jdbc:pulsar-io-jdbc-core"))
     runtimeOnly(libs.mariadb.jdbc)
+
+    testImplementation(libs.testcontainers.mariadb)
+    testImplementation(libs.pulsar.client)
+    testImplementation(libs.pulsar.functions.instance)
+    testImplementation(libs.avro)
 }
