@@ -69,9 +69,45 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # The test job is sharded across module groups so container-backed suites run on
+        # separate runners in parallel. "Other" is a catch-all: it runs `test integrationTest`
+        # for every module EXCEPT those claimed by the explicit groups, so a newly added module
+        # is always covered by exactly one shard and can never be silently skipped.
+        #
+        # INVARIANT: the `-x` exclusions in "Other" must list exactly the modules named in the
+        # "Debezium" and "Streaming & Search" groups — no more, no fewer.
         include:
-          - name: Connectors
-            tasks: test integrationTest
+          - name: Debezium
+            tasks: >-
+              :debezium:pulsar-io-debezium-core:test
+              :debezium:pulsar-io-debezium-mariadb:test
+              :debezium:pulsar-io-debezium-mongodb:test
+              :debezium:pulsar-io-debezium-mssql:test
+              :debezium:pulsar-io-debezium-mysql:test
+              :debezium:pulsar-io-debezium-oracle:test
+              :debezium:pulsar-io-debezium-postgres:test
+          - name: Streaming & Search
+            tasks: >-
+              :elastic-search:test
+              :kafka:test
+              :kafka-connect-adaptor:test
+              :kinesis:test
+              :dynamodb:test
+          - name: Other
+            tasks: >-
+              test integrationTest
+              -x :debezium:pulsar-io-debezium-core:test
+              -x :debezium:pulsar-io-debezium-mariadb:test
+              -x :debezium:pulsar-io-debezium-mongodb:test
+              -x :debezium:pulsar-io-debezium-mssql:test
+              -x :debezium:pulsar-io-debezium-mysql:test
+              -x :debezium:pulsar-io-debezium-oracle:test
+              -x :debezium:pulsar-io-debezium-postgres:test
+              -x :elastic-search:test
+              -x :kafka:test
+              -x :kafka-connect-adaptor:test
+              -x :kinesis:test
+              -x :dynamodb:test
     steps:
       - uses: actions/checkout@v6
 
