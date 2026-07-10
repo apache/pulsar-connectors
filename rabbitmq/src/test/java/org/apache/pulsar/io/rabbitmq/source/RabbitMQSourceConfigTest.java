@@ -22,6 +22,7 @@ import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertNotNull;
 import static org.testng.Assert.assertNull;
+import com.rabbitmq.client.ConnectionFactory;
 import java.io.File;
 import java.io.IOException;
 import java.util.HashMap;
@@ -61,6 +62,7 @@ public class RabbitMQSourceConfigTest {
         assertFalse(config.isAutoDelete());
         assertNull(config.getExchangeName());
         assertEquals("#", config.getRoutingKey());
+        assertFalse(config.isSsl());
     }
 
     @Test
@@ -86,6 +88,7 @@ public class RabbitMQSourceConfigTest {
         map.put("autoDelete", "true");
         map.put("exchangeName", "test-exchange");
         map.put("routingKey", "test.#");
+        map.put("ssl", "true");
 
         SourceContext sourceContext = Mockito.mock(SourceContext.class);
         RabbitMQSourceConfig config = RabbitMQSourceConfig.load(map, sourceContext);
@@ -111,6 +114,7 @@ public class RabbitMQSourceConfigTest {
         assertEquals(true, config.isAutoDelete());
         assertEquals("test-exchange", config.getExchangeName());
         assertEquals("test.#", config.getRoutingKey());
+        assertEquals(true, config.isSsl());
     }
 
     @Test
@@ -177,6 +181,26 @@ public class RabbitMQSourceConfigTest {
         SourceContext sourceContext = Mockito.mock(SourceContext.class);
         RabbitMQSourceConfig config = RabbitMQSourceConfig.load(map, sourceContext);
         config.validate();
+    }
+
+    @Test
+    public final void createConnectionFactoryWithSslTest() throws Exception {
+        Map<String, Object> map = new HashMap<>();
+        map.put("host", "localhost");
+        map.put("port", "5671");
+        map.put("virtualHost", "/");
+        map.put("username", "guest");
+        map.put("password", "guest");
+        map.put("queueName", "test-queue");
+        map.put("connectionName", "test-connection");
+        map.put("ssl", "true");
+
+        SourceContext sourceContext = Mockito.mock(SourceContext.class);
+        RabbitMQSourceConfig config = RabbitMQSourceConfig.load(map, sourceContext);
+
+        // building the factory with ssl enabled must set up the TLS context without throwing
+        ConnectionFactory connectionFactory = config.createConnectionFactory();
+        assertNotNull(connectionFactory);
     }
 
     @Test(expectedExceptions = IllegalArgumentException.class,
