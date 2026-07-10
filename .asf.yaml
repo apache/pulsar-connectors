@@ -46,6 +46,19 @@ github:
       required_linear_history: true
       required_signatures: false
       required_conversation_resolution: true
+  rulesets:
+    - name: "Default Branch Protection"
+      type: branch
+      branches:
+        includes:
+          - "~DEFAULT_BRANCH"
+          - "release/*"
+          - "rel/*"
+        excludes: []
+      bypass_teams:
+        - root
+      restrict_deletion: true
+      restrict_force_push: true
 notifications:
   commits: commits@pulsar.apache.org
   issues: commits@pulsar.apache.org
