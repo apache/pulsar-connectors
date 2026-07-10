@@ -58,16 +58,16 @@ public class FileConsumerThreadTest extends AbstractFileTest {
 
             for (File produced : producedFiles) {
                 verify(workQueue, times(1)).offer(produced);
-                verify(inProcess, times(1)).add(produced);
+                verify(inProcess, times(1)).put(produced);
                 verify(inProcess, times(1)).remove(produced);
-                verify(recentlyProcessed, times(1)).add(produced);
+                verify(recentlyProcessed, times(1)).put(produced);
             }
 
             verify(workQueue, times(1)).offer(any(File.class));
             verify(workQueue, atLeast(1)).take();
-            verify(inProcess, times(1)).add(any(File.class));
+            verify(inProcess, times(1)).put(any(File.class));
             verify(inProcess, times(1)).remove(any(File.class));
-            verify(recentlyProcessed, times(1)).add(any(File.class));
+            verify(recentlyProcessed, times(1)).put(any(File.class));
             verify(consumer, times(1)).consume((Record<byte[]>) any(Record.class));
         } catch (InterruptedException | ExecutionException e) {
             fail("Unable to generate files" + e.getLocalizedMessage());
@@ -93,16 +93,16 @@ public class FileConsumerThreadTest extends AbstractFileTest {
 
             for (File produced : producedFiles) {
                 verify(workQueue, times(1)).offer(produced);
-                verify(inProcess, times(1)).add(produced);
+                verify(inProcess, times(1)).put(produced);
                 verify(inProcess, times(1)).remove(produced);
-                verify(recentlyProcessed, times(1)).add(produced);
+                verify(recentlyProcessed, times(1)).put(produced);
             }
 
             verify(workQueue, times(50)).offer(any(File.class));
             verify(workQueue, atLeast(50)).take();
-            verify(inProcess, times(50)).add(any(File.class));
+            verify(inProcess, times(50)).put(any(File.class));
             verify(inProcess, times(50)).remove(any(File.class));
-            verify(recentlyProcessed, times(50)).add(any(File.class));
+            verify(recentlyProcessed, times(50)).put(any(File.class));
             verify(consumer, times(100)).consume((Record<byte[]>) any(Record.class));
         } catch (InterruptedException | ExecutionException e) {
             fail("Unable to generate files" + e.getLocalizedMessage());
@@ -128,16 +128,16 @@ public class FileConsumerThreadTest extends AbstractFileTest {
 
             for (File produced : producedFiles) {
                 verify(workQueue, times(1)).offer(produced);
-                verify(inProcess, times(1)).add(produced);
+                verify(inProcess, times(1)).put(produced);
                 verify(inProcess, times(1)).remove(produced);
-                verify(recentlyProcessed, times(1)).add(produced);
+                verify(recentlyProcessed, times(1)).put(produced);
             }
 
             verify(workQueue, times(1)).offer(any(File.class));
             verify(workQueue, atLeast(1)).take();
-            verify(inProcess, times(1)).add(any(File.class));
+            verify(inProcess, times(1)).put(any(File.class));
             verify(inProcess, times(1)).remove(any(File.class));
-            verify(recentlyProcessed, times(1)).add(any(File.class));
+            verify(recentlyProcessed, times(1)).put(any(File.class));
             verify(consumer, times(10)).consume((Record<byte[]>) any(Record.class));
         } catch (InterruptedException | ExecutionException e) {
             fail("Unable to generate files" + e.getLocalizedMessage());

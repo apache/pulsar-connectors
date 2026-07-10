@@ -18,8 +18,10 @@
  */
 package org.apache.pulsar.io.file;
 
+import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertNotNull;
+import static org.testng.Assert.assertThrows;
 import static org.testng.Assert.assertTrue;
 import java.io.File;
 import java.io.IOException;
@@ -140,6 +142,69 @@ public class FileSourceConfigTest {
         assertNotNull(config);
         assertFalse(config.getKeepFile());
         config.validate();
+    }
+
+    @Test
+    public void testDefaultMaxQueueSize() throws Exception {
+        Map<String, Object> map = new HashMap<>();
+        map.put("inputDirectory", INPUT_DIRECTORY);
+
+        FileSourceConfig config = FileSourceConfig.load(map);
+
+        // Assert that if the user provides no value, it defaults to 1000
+        assertEquals(config.getMaxQueueSize(), Integer.valueOf(1000));
+    }
+
+    @Test
+    public void testValidMaxQueueSize() throws Exception {
+        Map<String, Object> map = new HashMap<>();
+        map.put("inputDirectory", INPUT_DIRECTORY);
+        map.put("maxQueueSize", 5000);
+
+        FileSourceConfig config = FileSourceConfig.load(map);
+
+        // Assert that the custom value is loaded correctly
+        assertEquals(config.getMaxQueueSize(), Integer.valueOf(5000));
+
+        // Should not throw any exceptions
+        config.validate();
+    }
+
+    @Test
+    public void testInvalidMaxQueueSize() {
+        Map<String, Object> map = new HashMap<>();
+        map.put("inputDirectory", INPUT_DIRECTORY);
+
+        // Test 0
+        map.put("maxQueueSize", 0);
+        assertThrows(IllegalArgumentException.class, () -> {
+            FileSourceConfig config = FileSourceConfig.load(map);
+            config.validate();
+        });
+
+        // Test Negative Number
+        map.put("maxQueueSize", -5);
+        assertThrows(IllegalArgumentException.class, () -> {
+            FileSourceConfig config = FileSourceConfig.load(map);
+            config.validate();
+        });
+    }
+
+    /**
+     * An explicit null must be rejected by validate(), not deferred to FileSource.open(),
+     * which unboxes maxQueueSize to size the bounded queues and would throw a
+     * NullPointerException instead of a useful config error.
+     */
+    @Test
+    public void testNullMaxQueueSizeRejected() {
+        Map<String, Object> map = new HashMap<>();
+        map.put("inputDirectory", INPUT_DIRECTORY);
+        map.put("maxQueueSize", null);
+
+        assertThrows(IllegalArgumentException.class, () -> {
+            FileSourceConfig config = FileSourceConfig.load(map);
+            config.validate();
+        });
     }
 
     private File getFile(String name) {
