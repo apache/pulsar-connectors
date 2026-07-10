@@ -32,11 +32,13 @@ import io.debezium.text.ParsingException;
 import io.debezium.util.Collect;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 import org.apache.pulsar.client.admin.PulsarAdmin;
 import org.apache.pulsar.client.api.Producer;
 import org.apache.pulsar.client.api.PulsarClient;
 import org.apache.pulsar.client.api.Reader;
 import org.apache.pulsar.client.api.Schema;
+import org.awaitility.Awaitility;
 import org.testcontainers.containers.PulsarContainer;
 import org.testcontainers.utility.DockerImageName;
 import org.testng.annotations.AfterMethod;
@@ -71,6 +73,16 @@ public class PulsarSchemaHistoryTest {
         admin = PulsarAdmin.builder()
                 .serviceHttpUrl(pulsarContainer.getHttpServiceUrl())
                 .build();
+
+        // The broker creates the "public" tenant asynchronously during bootstrap, and the
+        // container's wait strategy can return before that finishes. Creating the namespace
+        // immediately then fails with "Tenant does not exist" (HTTP 404). Seen in CI:
+        // https://github.com/apache/pulsar-connectors/actions/runs/29055562433
+        Awaitility.await()
+                .atMost(60, TimeUnit.SECONDS)
+                .pollInterval(250, TimeUnit.MILLISECONDS)
+                .ignoreExceptions()
+                .until(() -> admin.tenants().getTenants().contains("public"));
 
         // Create namespace used by tests
         admin.namespaces().createNamespace("public/my-ns");
