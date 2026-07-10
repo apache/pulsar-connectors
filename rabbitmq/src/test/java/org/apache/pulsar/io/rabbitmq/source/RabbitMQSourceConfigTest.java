@@ -21,6 +21,7 @@ package org.apache.pulsar.io.rabbitmq.source;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertNotNull;
+import static org.testng.Assert.assertNull;
 import java.io.File;
 import java.io.IOException;
 import java.util.HashMap;
@@ -55,6 +56,11 @@ public class RabbitMQSourceConfigTest {
         assertEquals(Integer.parseInt("0"), config.getPrefetchCount());
         assertFalse(config.isPrefetchGlobal());
         assertFalse(config.isPassive());
+        assertFalse(config.isDurable());
+        assertFalse(config.isExclusive());
+        assertFalse(config.isAutoDelete());
+        assertNull(config.getExchangeName());
+        assertEquals("#", config.getRoutingKey());
     }
 
     @Test
@@ -75,6 +81,11 @@ public class RabbitMQSourceConfigTest {
         map.put("prefetchCount", "0");
         map.put("prefetchGlobal", "false");
         map.put("passive", "true");
+        map.put("durable", "true");
+        map.put("exclusive", "true");
+        map.put("autoDelete", "true");
+        map.put("exchangeName", "test-exchange");
+        map.put("routingKey", "test.#");
 
         SourceContext sourceContext = Mockito.mock(SourceContext.class);
         RabbitMQSourceConfig config = RabbitMQSourceConfig.load(map, sourceContext);
@@ -95,6 +106,11 @@ public class RabbitMQSourceConfigTest {
         assertEquals(false, config.isPrefetchGlobal());
         assertEquals(false, config.isPrefetchGlobal());
         assertEquals(true, config.isPassive());
+        assertEquals(true, config.isDurable());
+        assertEquals(true, config.isExclusive());
+        assertEquals(true, config.isAutoDelete());
+        assertEquals("test-exchange", config.getExchangeName());
+        assertEquals("test.#", config.getRoutingKey());
     }
 
     @Test
