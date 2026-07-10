@@ -25,6 +25,7 @@ import com.rabbitmq.client.ConnectionFactory;
 import com.rabbitmq.client.DefaultConsumer;
 import com.rabbitmq.client.Envelope;
 import java.io.IOException;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 import lombok.Data;
@@ -51,6 +52,7 @@ public class RabbitMQSource extends PushSource<byte[]> {
     private Connection rabbitMQConnection;
     private Channel rabbitMQChannel;
     private RabbitMQSourceConfig rabbitMQSourceConfig;
+    private String queueName;
 
     @Override
     public void open(Map<String, Object> config, SourceContext sourceContext) throws Exception {
@@ -64,19 +66,33 @@ public class RabbitMQSource extends PushSource<byte[]> {
                 rabbitMQConnection.getPort()
         );
         rabbitMQChannel = rabbitMQConnection.createChannel();
+        AMQP.Queue.DeclareOk queueDeclaration;
         if (rabbitMQSourceConfig.isPassive()) {
-            rabbitMQChannel.queueDeclarePassive(rabbitMQSourceConfig.getQueueName());
+            queueDeclaration = rabbitMQChannel.queueDeclarePassive(rabbitMQSourceConfig.getQueueName());
         } else {
-            rabbitMQChannel.queueDeclare(rabbitMQSourceConfig.getQueueName(), false, false, false, null);
+            queueDeclaration = rabbitMQChannel.queueDeclare(rabbitMQSourceConfig.getQueueName(),
+                                                        rabbitMQSourceConfig.isDurable(),
+                                                        rabbitMQSourceConfig.isExclusive(),
+                                                        rabbitMQSourceConfig.isAutoDelete(),
+                                                        null
+            );
         }
+        queueName = queueDeclaration.getQueue();
         logger.info("Setting channel.basicQos({}, {}).",
                 rabbitMQSourceConfig.getPrefetchCount(),
                 rabbitMQSourceConfig.isPrefetchGlobal()
         );
         rabbitMQChannel.basicQos(rabbitMQSourceConfig.getPrefetchCount(), rabbitMQSourceConfig.isPrefetchGlobal());
+        String exchange = rabbitMQSourceConfig.getExchangeName();
+        String routingKey = rabbitMQSourceConfig.getRoutingKey();
+        if (exchange != null && !exchange.isEmpty()) {
+            // note: the exchange is expected to already exist; it is not declared here
+            rabbitMQChannel.queueBind(queueName, exchange, routingKey);
+            logger.info("Bound queue {} to exchange {} with routing key {}.", queueName, exchange, routingKey);
+        }
         com.rabbitmq.client.Consumer consumer = new RabbitMQConsumer(this, rabbitMQChannel);
-        rabbitMQChannel.basicConsume(rabbitMQSourceConfig.getQueueName(), consumer);
-        logger.info("A consumer for queue {} has been successfully started.", rabbitMQSourceConfig.getQueueName());
+        rabbitMQChannel.basicConsume(queueName, consumer);
+        logger.info("A consumer for queue {} has been successfully started.", queueName);
     }
 
     @Override
@@ -97,6 +113,9 @@ public class RabbitMQSource extends PushSource<byte[]> {
         public void handleDelivery(String consumerTag, Envelope envelope, AMQP.BasicProperties properties, byte[] body)
                 throws IOException {
             long deliveryTag = envelope.getDeliveryTag();
+            Map<String, String> pulsarProperties = new HashMap<>();
+            pulsarProperties.put("consumerTag", consumerTag);
+            pulsarProperties.put("queueName", queueName);
             source.consume(new RabbitMQRecord(Optional.ofNullable(envelope.getRoutingKey()), body, () -> {
                 // acknowledge this delivery tag to RabbitMQ
                 try {
@@ -111,7 +130,7 @@ public class RabbitMQSource extends PushSource<byte[]> {
                 } catch (IOException e) {
                     logger.error("Error while negatively acknowledging envelope {}.", envelope, e);
                 }
-            }));
+            }, pulsarProperties));
         }
     }
 
@@ -121,6 +140,7 @@ public class RabbitMQSource extends PushSource<byte[]> {
         private final byte[] value;
         private final Runnable ackFunction;
         private final Runnable nackFunction;
+        private final Map<String, String> properties;
 
         @Override
         public void ack() {
