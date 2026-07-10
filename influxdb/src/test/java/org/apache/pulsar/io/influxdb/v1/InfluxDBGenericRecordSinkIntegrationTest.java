@@ -20,6 +20,7 @@ package org.apache.pulsar.io.influxdb.v1;
 
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertNotNull;
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -95,7 +96,8 @@ public class InfluxDBGenericRecordSinkIntegrationTest {
                 .withEnv("INFLUXDB_ADMIN_USER", USERNAME)
                 .withEnv("INFLUXDB_ADMIN_PASSWORD", PASSWORD)
                 .withEnv("INFLUXDB_HTTP_AUTH_ENABLED", "true")
-                .waitingFor(Wait.forHttp("/ping").forPort(INFLUXDB_PORT).forStatusCode(204));
+                .waitingFor(Wait.forHttp("/ping").forPort(INFLUXDB_PORT).forStatusCode(204))
+                .withStartupTimeout(Duration.ofMinutes(3));
         influxdbContainer.start();
 
         influxdbUrl = "http://" + influxdbContainer.getHost() + ":"

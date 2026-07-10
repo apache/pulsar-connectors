@@ -24,6 +24,7 @@ import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertTrue;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
@@ -59,7 +60,8 @@ public class KinesisSinkTest {
     public static final LocalStackContainer LOCAL_STACK_CONTAINER =
             new LocalStackContainer(DockerImageName.parse("localstack/localstack:4.0.3"))
                     .withServices(LocalStackContainer.Service.KINESIS, LocalStackContainer.Service.STS)
-                    .withEnv("KINESIS_PROVIDER", "kinesalite");
+                    .withEnv("KINESIS_PROVIDER", "kinesalite")
+                    .withStartupTimeout(Duration.ofMinutes(5));
 
     @BeforeClass(alwaysRun = true)
     public void beforeClass() throws Exception {

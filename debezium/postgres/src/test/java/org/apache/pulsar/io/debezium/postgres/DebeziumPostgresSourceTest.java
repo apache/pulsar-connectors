@@ -26,6 +26,7 @@ import static org.testng.Assert.assertNotNull;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.Statement;
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
@@ -72,10 +73,12 @@ public class DebeziumPostgresSourceTest {
                 .withCommand("postgres",
                         "-c", "wal_level=logical",
                         "-c", "max_wal_senders=4",
-                        "-c", "max_replication_slots=4");
+                        "-c", "max_replication_slots=4")
+                .withStartupTimeout(Duration.ofMinutes(5));
         postgresContainer.start();
 
-        pulsarContainer = new PulsarContainer(DockerImageName.parse(PULSAR_IMAGE));
+        pulsarContainer = new PulsarContainer(DockerImageName.parse(PULSAR_IMAGE))
+                .withStartupTimeout(Duration.ofMinutes(5));
         pulsarContainer.start();
 
         pulsarClient = PulsarClient.builder()
