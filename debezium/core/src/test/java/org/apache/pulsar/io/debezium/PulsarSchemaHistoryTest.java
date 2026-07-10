@@ -30,6 +30,7 @@ import io.debezium.relational.history.SchemaHistory;
 import io.debezium.relational.history.SchemaHistoryListener;
 import io.debezium.text.ParsingException;
 import io.debezium.util.Collect;
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
@@ -64,7 +65,8 @@ public class PulsarSchemaHistoryTest {
 
     @BeforeMethod
     protected void setup() throws Exception {
-        pulsarContainer = new PulsarContainer(DockerImageName.parse(PULSAR_IMAGE));
+        pulsarContainer = new PulsarContainer(DockerImageName.parse(PULSAR_IMAGE))
+                .withStartupTimeout(Duration.ofMinutes(5));
         pulsarContainer.start();
 
         pulsarClient = PulsarClient.builder()

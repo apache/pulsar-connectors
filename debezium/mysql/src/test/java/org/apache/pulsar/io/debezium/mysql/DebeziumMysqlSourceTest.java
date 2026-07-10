@@ -26,6 +26,7 @@ import static org.testng.Assert.assertNotNull;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.Statement;
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
@@ -86,10 +87,12 @@ readerExecutor = Executors.newSingleThreadExecutor(r -> {
                         "--gtid-mode=ON",
                         "--enforce-gtid-consistency=ON"
                 )
-                .waitingFor(Wait.forLogMessage(".*ready for connections.*\\s", 2));
+                .waitingFor(Wait.forLogMessage(".*ready for connections.*\\s", 2))
+                .withStartupTimeout(Duration.ofMinutes(5));
         mysqlContainer.start();
 
-        pulsarContainer = new PulsarContainer(DockerImageName.parse(PULSAR_IMAGE));
+        pulsarContainer = new PulsarContainer(DockerImageName.parse(PULSAR_IMAGE))
+                .withStartupTimeout(Duration.ofMinutes(5));
         pulsarContainer.start();
 
         pulsarClient = PulsarClient.builder()

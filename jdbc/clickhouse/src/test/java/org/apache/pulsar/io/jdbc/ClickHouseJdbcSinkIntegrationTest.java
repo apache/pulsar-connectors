@@ -25,6 +25,7 @@ import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -91,7 +92,8 @@ public class ClickHouseJdbcSinkIntegrationTest {
 
     @BeforeClass(alwaysRun = true)
     public void setUp() throws Exception {
-        clickhouse = new ClickHouseContainer(CLICKHOUSE_IMAGE);
+        clickhouse = new ClickHouseContainer(CLICKHOUSE_IMAGE)
+                .withStartupTimeout(Duration.ofMinutes(5));
         clickhouse.start();
 
         // Create the destination table over the HTTP interface (ClickHouse requires an explicit

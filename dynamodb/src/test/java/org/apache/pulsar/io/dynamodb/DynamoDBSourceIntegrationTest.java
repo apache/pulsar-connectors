@@ -37,6 +37,7 @@ import com.amazonaws.services.dynamodbv2.model.ScalarAttributeType;
 import com.amazonaws.services.dynamodbv2.model.StreamSpecification;
 import com.amazonaws.services.dynamodbv2.model.StreamViewType;
 import java.net.URI;
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
@@ -82,7 +83,8 @@ public class DynamoDBSourceIntegrationTest {
             new LocalStackContainer(DockerImageName.parse("localstack/localstack:4.0.3"))
                     .withServices(
                             LocalStackContainer.Service.DYNAMODB,
-                            LocalStackContainer.Service.CLOUDWATCH);
+                            LocalStackContainer.Service.CLOUDWATCH)
+                    .withStartupTimeout(Duration.ofMinutes(5));
 
     private AmazonDynamoDB dynamoDB;
     private String streamArn;

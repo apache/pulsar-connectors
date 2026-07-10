@@ -32,6 +32,7 @@ import java.net.ServerSocket;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
@@ -106,7 +107,8 @@ public class NSQSourceIntegrationTest {
                 .withNetworkAliases("nsqlookupd")
                 .withCommand("/nsqlookupd")
                 .withExposedPorts(LOOKUPD_TCP_PORT, LOOKUPD_HTTP_PORT)
-                .waitingFor(Wait.forHttp("/ping").forPort(LOOKUPD_HTTP_PORT));
+                .waitingFor(Wait.forHttp("/ping").forPort(LOOKUPD_HTTP_PORT))
+                .withStartupTimeout(Duration.ofMinutes(3));
         nsqlookupd.start();
 
         nsqd = new GenericContainer<>(NSQ_IMAGE)
@@ -134,7 +136,8 @@ public class NSQSourceIntegrationTest {
                             Ports.Binding.bindPort(nsqdTcpPort));
                     hostConfig.withPortBindings(portBindings);
                 })
-                .waitingFor(Wait.forHttp("/ping").forPort(NSQD_HTTP_PORT));
+                .waitingFor(Wait.forHttp("/ping").forPort(NSQD_HTTP_PORT))
+                .withStartupTimeout(Duration.ofMinutes(3));
         nsqd.start();
 
         log.info("nsqlookupd http {}:{}, nsqd http {}:{}, nsqd tcp {}:{}",
