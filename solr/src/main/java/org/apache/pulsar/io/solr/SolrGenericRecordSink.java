@@ -153,30 +153,46 @@ public class SolrGenericRecordSink extends SolrAbstractSink<GenericRecord> {
             return null;
         }
 
-        // Assumes index 0 is the Primary Key per standard Debezium behavior
-        Object id = beforeRecord.getField(fields.get(0));
+        // Safe identifier lookup strategy: Look for a field explicitly named "id" first
+        Field targetIdField = fields.stream()
+                .filter(f -> "id".equals(f.getName()))
+                .findFirst()
+                .orElse(fields.get(0));
+
+        Object id = beforeRecord.getField(targetIdField);
         if (id == null) {
             log.warn("DELETE event received, but primary key field value was null.");
             return null;
         }
 
-        executeSolrDelete(id);
+        // We now let the exception bubble up to mapDebeziumPayload so the parent class fails the record
+        try {
+            executeSolrDelete(id);
+        } catch (Exception e) {
+            log.error("Failed to propagate document deletion to Solr for id={}", id, e);
+            throw new RuntimeException("Solr deletion failed", e);
+        }
+
         return null;
     }
 
     /**
-     * Helper to issue delete commands to the SolrClient using configured commit settings.
+     * Helper to issue delete commands via an UpdateRequest against the targeted collection.
+     * Throws an exception on failure to ensure proper Pulsar record lifecycle fail/retry.
      */
-    private void executeSolrDelete(Object id) {
-        try {
-            int commitWithinMs = (solrSinkConfig != null && solrSinkConfig.getSolrCommitWithinMs() > 0)
-                    ? solrSinkConfig.getSolrCommitWithinMs() : 1000;
+    private void executeSolrDelete(Object id) throws Exception {
+        int commitWithinMs = (solrSinkConfig != null && solrSinkConfig.getSolrCommitWithinMs() > 0)
+                ? solrSinkConfig.getSolrCommitWithinMs() : 1000;
 
-            getSolrClient().deleteById(String.valueOf(id), commitWithinMs);
-            log.debug("Successfully issued delete to Solr for id={} with commitWithinMs={}", id, commitWithinMs);
-        } catch (Exception e) {
-            log.error("Failed to delete document from Solr for id={}", id, e);
-        }
+        org.apache.solr.client.solrj.request.UpdateRequest deleteRequest =
+                new org.apache.solr.client.solrj.request.UpdateRequest();
+
+        deleteRequest.deleteById(String.valueOf(id));
+        deleteRequest.setCommitWithin(commitWithinMs);
+
+        // Processes the request against the explicit collection, honoring client auth settings
+        deleteRequest.process(getSolrClient(), solrSinkConfig.getSolrCollection());
+        log.debug("Successfully issued delete to Solr for id={} with commitWithinMs={}", id, commitWithinMs);
     }
 
     /**

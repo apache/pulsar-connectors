@@ -37,6 +37,7 @@ import org.apache.pulsar.client.impl.schema.generic.GenericSchemaImpl;
 import org.apache.pulsar.common.schema.KeyValue;
 import org.apache.pulsar.functions.api.Record;
 import org.apache.pulsar.functions.source.PulsarRecord;
+import org.apache.solr.client.solrj.SolrClient;
 import org.apache.solr.common.SolrInputDocument;
 import org.testng.Assert;
 import org.testng.annotations.AfterMethod;
@@ -194,7 +195,19 @@ public class SolrGenericRecordSinkTest {
     @SuppressWarnings("unchecked")
     public void testDebeziumUnwrapDelete() throws Exception {
         configs.put("unwrapDebeziumRecord", true);
-        sink.open(configs, null);
+
+        // Create a mocked SolrClient to simulate a successful network response
+        SolrClient mockSolrClient = mock(SolrClient.class);
+
+        // Override getSolrClient to inject our mock and bypass real HTTP calls
+        SolrGenericRecordSink mockNetworkSink = new SolrGenericRecordSink() {
+            @Override
+            protected SolrClient getSolrClient() {
+                return mockSolrClient;
+            }
+        };
+
+        mockNetworkSink.open(configs, null);
 
         // Build root record
         GenericRecord mockRootRecord = mock(GenericRecord.class);
@@ -223,8 +236,8 @@ public class SolrGenericRecordSinkTest {
         when(mockBeforeRecord.getFields()).thenReturn(Arrays.asList(idField));
         when(mockBeforeRecord.getField(idField)).thenReturn(500);
 
-        // This should trigger executeSolrDelete and return null
-        SolrInputDocument doc = sink.convert(mockMessage);
+        // Process the convert using the mocked network sink
+        SolrInputDocument doc = mockNetworkSink.convert(mockMessage);
 
         // In our refactored logic, a DELETE returns null so the parent class can ACK it
         Assert.assertNull(doc, "Document should be null for DELETE events to trigger ACK");
