@@ -293,102 +293,117 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
             }
             return;
         }
-        boolean needAnotherRound;
-        final Deque<Record<T>> swapList = new LinkedList<>();
+        // Drain queued batches iteratively. This was previously a tail-recursive call
+        // (flush() calling itself when another full batch was queued), which under sustained
+        // catch-up load never unwinds the stack and eventually throws StackOverflowError.
+        try {
+            boolean needAnotherRound = false;
+            do {
+                final Deque<Record<T>> swapList = new LinkedList<>();
 
-        synchronized (incomingList) {
-            if (incomingList.isEmpty()) {
-                isFlushing.set(false);
-                return;
-            }
-            if (log.isDebugEnabled()) {
-                log.debug("Starting flush, queue size: {}", incomingList.size());
-            }
-            final int actualBatchSize = batchSize > 0 ? Math.min(incomingList.size(), batchSize) :
-                    incomingList.size();
-
-            for (int i = 0; i < actualBatchSize; i++) {
-                swapList.add(incomingList.removeFirst());
-            }
-            needAnotherRound = batchSize > 0 && !incomingList.isEmpty() && incomingList.size() >= batchSize;
-        }
-            long start = System.nanoTime();
-
-            int count = 0;
-            try {
-                ensureConnection();
-
-                PreparedStatement currentBatch = null;
-                final List<Mutation> mutations = swapList
-                        .stream()
-                        .map(this::createMutation)
-                        .collect(Collectors.toList());
-                // bind each record value
-                PreparedStatement statement;
-                for (Mutation mutation : mutations) {
-                    switch (mutation.getType()) {
-                        case DELETE:
-                            statement = deleteStatement;
-                            break;
-                        case UPDATE:
-                            statement = updateStatement;
-                            break;
-                        case INSERT:
-                            statement = insertStatement;
-                            break;
-                        case UPSERT:
-                            statement = upsertStatement;
-                            break;
-                        default:
-                            String msg = String.format(
-                                    "Unsupported action %s, can be one of %s, or not set which indicate %s",
-                                    mutation.getType(), Arrays.toString(MutationType.values()), MutationType.INSERT);
-                            throw new IllegalArgumentException(msg);
+                synchronized (incomingList) {
+                    if (incomingList.isEmpty()) {
+                        return;
                     }
-                    bindValue(statement, mutation);
-                    count += 1;
-                    if (jdbcSinkConfig.isUseJdbcBatch()) {
-                        if (currentBatch != null && statement != currentBatch) {
-                            internalFlushBatch(swapList, currentBatch, count, start);
-                            start = System.nanoTime();
-                        }
-                        statement.addBatch();
-                        currentBatch = statement;
-                    } else {
-                        statement.execute();
-                        if (!jdbcSinkConfig.isUseTransactions()) {
-                            swapList.removeFirst().ack();
-                        }
+                    if (log.isDebugEnabled()) {
+                        log.debug("Starting flush, queue size: {}", incomingList.size());
                     }
-                }
+                    final int actualBatchSize = batchSize > 0 ? Math.min(incomingList.size(), batchSize) :
+                            incomingList.size();
 
-                if (jdbcSinkConfig.isUseJdbcBatch()) {
-                    internalFlushBatch(swapList, currentBatch, count, start);
-                } else {
-                    internalFlush(swapList);
+                    for (int i = 0; i < actualBatchSize; i++) {
+                        swapList.add(incomingList.removeFirst());
+                    }
+                    needAnotherRound = batchSize > 0 && !incomingList.isEmpty()
+                            && incomingList.size() >= batchSize;
                 }
-                queueFullLogged = false;
-            } catch (Exception e) {
-                log.error("Got exception {} after {} ms, failing {} messages",
-                        e.getMessage(),
-                        (System.nanoTime() - start) / 1000 / 1000,
-                        swapList.size(),
-                        e);
-                swapList.forEach(Record::fail);
+                long start = System.nanoTime();
+
+                int count = 0;
                 try {
-                    if (jdbcSinkConfig.isUseTransactions()) {
-                        connection.rollback();
-                    }
-                } catch (Exception ex) {
-                    log.error("Failed to rollback transaction", ex);
-                }
-                fatal(e);
-            }
+                    ensureConnection();
 
+                    PreparedStatement currentBatch = null;
+                    final List<Mutation> mutations = swapList
+                            .stream()
+                            .map(this::createMutation)
+                            .collect(Collectors.toList());
+                    // bind each record value
+                    PreparedStatement statement;
+                    for (Mutation mutation : mutations) {
+                        switch (mutation.getType()) {
+                            case DELETE:
+                                statement = deleteStatement;
+                                break;
+                            case UPDATE:
+                                statement = updateStatement;
+                                break;
+                            case INSERT:
+                                statement = insertStatement;
+                                break;
+                            case UPSERT:
+                                statement = upsertStatement;
+                                break;
+                            default:
+                                String msg = String.format(
+                                        "Unsupported action %s, can be one of %s, or not set which indicate %s",
+                                        mutation.getType(), Arrays.toString(MutationType.values()),
+                                        MutationType.INSERT);
+                                throw new IllegalArgumentException(msg);
+                        }
+                        bindValue(statement, mutation);
+                        count += 1;
+                        if (jdbcSinkConfig.isUseJdbcBatch()) {
+                            if (currentBatch != null && statement != currentBatch) {
+                                internalFlushBatch(swapList, currentBatch, count, start);
+                                start = System.nanoTime();
+                            }
+                            statement.addBatch();
+                            currentBatch = statement;
+                        } else {
+                            statement.execute();
+                            if (!jdbcSinkConfig.isUseTransactions()) {
+                                swapList.removeFirst().ack();
+                            }
+                        }
+                    }
+
+                    if (jdbcSinkConfig.isUseJdbcBatch()) {
+                        internalFlushBatch(swapList, currentBatch, count, start);
+                    } else {
+                        internalFlush(swapList);
+                    }
+                    queueFullLogged = false;
+                } catch (Throwable e) {
+                    // Catch Throwable (not just Exception) so an Error such as StackOverflowError
+                    // is surfaced to the framework via fatal() and the instance is terminated and
+                    // restarted, instead of the flush thread dying silently while the pod keeps
+                    // reporting healthy.
+                    // Log toString() rather than getMessage(): an Error such as
+                    // StackOverflowError usually carries no message, which would render as
+                    // "null" and hide what actually failed.
+                    log.error("Got throwable {} after {} ms, failing {} messages",
+                            e.toString(),
+                            TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start),
+                            swapList.size(),
+                            e);
+                    swapList.forEach(Record::fail);
+                    try {
+                        if (jdbcSinkConfig.isUseTransactions()) {
+                            connection.rollback();
+                        }
+                    } catch (Exception ex) {
+                        log.error("Failed to rollback transaction", ex);
+                    }
+                    fatal(e);
+                    needAnotherRound = false;
+                }
+            } while (needAnotherRound);
+        } finally {
+            // Always release the flag, even if an Error escaped the inner try, otherwise the
+            // sink would be permanently stuck in the flushing state.
             isFlushing.set(false);
-            if (needAnotherRound) {
-                flush();
-            }
+        }
     }
 
     private void ensureConnection() throws Exception {
@@ -489,7 +504,7 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
      *
      * @param e the fatal exception
      */
-    private void fatal(Exception e) {
+    private void fatal(Throwable e) {
         if (sinkContext != null && state.compareAndSet(State.OPEN, State.FAILED)) {
             log.error("Fatal error in JDBC sink, signaling framework for shutdown", e);
             if (scheduledFlushTask != null) {
