@@ -18,18 +18,30 @@
  */
 package org.apache.pulsar.io.kafka;
 
+import java.time.Duration;
+import java.util.Collections;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.mockito.Mockito;
 import org.testng.Assert;
 import org.testng.annotations.Test;
 
-import java.time.Duration;
-import java.util.Collections;
-
+/**
+ * When the Kafka consumer thread hits a fatal error it must interrupt the instance thread,
+ * which is otherwise blocked on Pulsar network I/O and would deadlock.
+ *
+ * <p>The test plays the part of the instance thread. Coordination is by latch rather than by
+ * sleeping: every wait either completes or fails the test, so a regression surfaces as a
+ * timeout with a clear message instead of a hang.
+ */
 public class KafkaSourceDeadlockTest {
 
-    @Test(timeOut = 15000)
+    private static final long TIMEOUT_SECONDS = 10;
+
+    @Test(timeOut = 60_000)
     public void testConnectorBreaksInstanceThreadDeadlock() throws Exception {
         KafkaBytesSource source = new KafkaBytesSource();
 
@@ -41,61 +53,55 @@ public class KafkaSourceDeadlockTest {
         Mockito.when(config.isAutoCommitEnabled()).thenReturn(false);
         source.setKafkaSourceConfig(config);
 
+        // Signals the consumer thread has entered poll() and is blocked there.
+        final CountDownLatch pollEntered = new CountDownLatch(1);
+        // Never counted down: poll() leaves this wait only by being interrupted.
+        final CountDownLatch pollReleased = new CountDownLatch(1);
+        // The consumer thread identifies itself, so the test need not scan JVM threads by name.
+        final AtomicReference<Thread> consumerThread = new AtomicReference<>();
+
         @SuppressWarnings("unchecked")
         Consumer<Object, Object> mockConsumer = Mockito.mock(Consumer.class);
         source.setConsumer(mockConsumer);
 
-        // Make the mocked poll() block safely so the background thread stays alive in its loop
         Mockito.when(mockConsumer.poll(Mockito.any(Duration.class))).thenAnswer(invocation -> {
+            consumerThread.set(Thread.currentThread());
+            pollEntered.countDown();
             try {
-                Thread.sleep(5000);
+                // Interruptible, unlike Thread.sleep with a guessed duration.
+                pollReleased.await();
             } catch (InterruptedException e) {
-                // Trigger the fatal error handling block when interrupted by the simulator
+                // Stand in for a fatal Kafka error surfacing on the consumer thread.
                 throw new RuntimeException("Simulated fatal Kafka network error", e);
             }
             return new ConsumerRecords<>(Collections.emptyMap());
         });
 
-        // Start the background Kafka polling thread
-        source.start();
-
-        // Simulate a fatal exception in the background consumer thread
-        Thread fatalErrorSimulator = new Thread(() -> {
-            try {
-                // Wait to ensure the instance thread enters its blocked state first
-                Thread.sleep(1000);
-
-                // Find the Kafka Source Thread in the JVM and interrupt it
-                Thread runner = Thread.getAllStackTraces().keySet().stream()
-                        .filter(t -> "Kafka Source Thread".equals(t.getName()))
-                        .findFirst()
-                        .orElse(null);
-
-                if (runner != null) {
-                    runner.interrupt();
-                }
-            } catch (Exception e) {
-                // Ignore simulator exceptions
-            }
-        });
-        fatalErrorSimulator.start();
-
-        // Simulate the instance thread blocking on Pulsar network I/O
         boolean wasInterrupted = false;
         try {
-            Thread.sleep(10000);
-            Assert.fail("Test failed: The instance thread remained deadlocked and was never interrupted.");
-        } catch (InterruptedException e) {
-            // Expected behavior: The consumer thread successfully interrupted this thread to break the deadlock
-            wasInterrupted = true;
+            source.start();
+
+            Assert.assertTrue(pollEntered.await(TIMEOUT_SECONDS, TimeUnit.SECONDS),
+                    "the consumer thread never reached poll()");
+
+            // Fail the consumer thread. Its fatal-error handling must interrupt this thread.
+            consumerThread.get().interrupt();
+
+            try {
+                // Stands in for the instance thread blocking on Pulsar network I/O. The interrupt
+                // may already have arrived, in which case this throws immediately.
+                Thread.sleep(TimeUnit.SECONDS.toMillis(TIMEOUT_SECONDS));
+                Assert.fail("the instance thread remained deadlocked and was never interrupted");
+            } catch (InterruptedException e) {
+                wasInterrupted = true;
+            }
+        } finally {
+            // Clear the interrupt flag so close() runs cleanly, and close even if we failed above.
+            Thread.interrupted();
+            source.close();
         }
 
-        // Cleanup the interrupt flag so close() works cleanly
-        Thread.interrupted();
-        source.close();
-
-        // Verify that the deadlock resolution logic executed successfully
         Assert.assertTrue(wasInterrupted,
-                "The instance thread should have been interrupted by the failing consumer thread to prevent deadlock.");
+                "the failing consumer thread should have interrupted the instance thread");
     }
 }
