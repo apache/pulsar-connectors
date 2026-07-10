@@ -36,6 +36,11 @@ dependencies {
     // the version we specify, regardless of what version a transitive dependency requests.
     // BOM entries (detected by alias name) are imported as platforms rather than constraints.
     catalog.libraryAliases.forEach { alias ->
+        // Skip aliases that are subproject-specific overrides (e.g. jetty9-bom-override).
+        // These pin the same Maven coordinates to a different version than the shared
+        // platform — including them here would declare two versions of the same module
+        // and break consumers (e.g. alluxio uses jetty 9.x while everything else uses 12.x).
+        if (alias.endsWith(".override")) return@forEach
         catalog.findLibrary(alias).ifPresent { provider ->
             val dep = provider.get()
             if (alias.endsWith(".bom")) {

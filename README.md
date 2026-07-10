@@ -33,7 +33,7 @@ mounting them into the `apachepulsar/pulsar` Docker image.
 | Connector | Description |
 |-----------|-------------|
 | Canal | MySQL binlog via Alibaba Canal |
-| Debezium (MySQL, PostgreSQL, MongoDB, MSSQL, Oracle) | CDC via Debezium |
+| Debezium (MySQL, MariaDB, PostgreSQL, MongoDB, MSSQL, Oracle) | CDC via Debezium |
 | DynamoDB | Amazon DynamoDB Streams |
 | File | Local filesystem |
 | Kafka | Apache Kafka |
@@ -58,6 +58,7 @@ mounting them into the `apachepulsar/pulsar` Docker image.
 | Kafka | Apache Kafka |
 | Kinesis | Amazon Kinesis Data Streams |
 | MongoDB | MongoDB |
+| MQTT | MQTT broker |
 | Redis | Redis |
 | Solr | Apache Solr |
 
