@@ -28,4 +28,6 @@ dependencies {
     implementation(libs.commons.collections4)
     implementation(libs.commons.lang3)
     implementation(libs.jackson.dataformat.yaml)
+
+    testImplementation(libs.testcontainers)
 }
