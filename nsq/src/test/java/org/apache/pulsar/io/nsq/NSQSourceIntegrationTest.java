@@ -26,7 +26,9 @@ import com.github.dockerjava.api.model.ExposedPort;
 import com.github.dockerjava.api.model.HostConfig;
 import com.github.dockerjava.api.model.Ports;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.ServerSocket;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
@@ -75,7 +77,6 @@ public class NSQSourceIntegrationTest {
     private static final String CHANNEL = "pulsar-nsq-it-channel";
 
     // nsqd's advertised TCP port must equal the host port the consumer dials, so it is pinned.
-    private static final int NSQD_TCP_PORT = 4150;
     private static final int NSQD_HTTP_PORT = 4151;
     private static final int LOOKUPD_TCP_PORT = 4160;
     private static final int LOOKUPD_HTTP_PORT = 4161;
@@ -86,12 +87,18 @@ public class NSQSourceIntegrationTest {
     private static Network network;
     private static GenericContainer<?> nsqlookupd;
     private static GenericContainer<?> nsqd;
+    // Chosen free host port for nsqd's TCP listener. nsqd advertises broadcast_address:tcp_port to
+    // the client via nsqlookupd, and the client dials it directly, so the advertised port must be a
+    // real, host-reachable port — hence a fixed binding rather than Testcontainers' random mapping.
+    // Picking a free port (rather than hard-coding 4150) avoids collisions on busy/shared runners.
+    private static int nsqdTcpPort;
 
     private NSQSource source;
     private ExecutorService readerExecutor;
 
     @BeforeClass(alwaysRun = true)
     public void beforeClass() {
+        nsqdTcpPort = findFreePort();
         network = Network.newNetwork();
 
         nsqlookupd = new GenericContainer<>(NSQ_IMAGE)
@@ -108,19 +115,23 @@ public class NSQSourceIntegrationTest {
                 .withCommand(
                         "/nsqd",
                         "--lookupd-tcp-address=nsqlookupd:" + LOOKUPD_TCP_PORT,
-                        "--broadcast-address=127.0.0.1")
-                .withExposedPorts(NSQD_TCP_PORT, NSQD_HTTP_PORT)
-                // Pin the nsqd TCP port so the broadcast_address:tcp_port (127.0.0.1:4150)
-                // advertised to the client is reachable from the host. Mutate (not replace) the
-                // existing HostConfig so Testcontainers' network and other port bindings survive.
+                        "--broadcast-address=127.0.0.1",
+                        // Listen on the chosen free port so the advertised tcp_port matches the host
+                        // binding below.
+                        "--tcp-address=0.0.0.0:" + nsqdTcpPort)
+                .withExposedPorts(nsqdTcpPort, NSQD_HTTP_PORT)
+                // Bind the nsqd TCP port 1:1 to the host so the broadcast_address:tcp_port
+                // (127.0.0.1:<nsqdTcpPort>) advertised to the client is reachable. Mutate (not
+                // replace) the existing HostConfig so Testcontainers' network and other bindings
+                // survive.
                 .withCreateContainerCmdModifier(cmd -> {
                     HostConfig hostConfig = cmd.getHostConfig();
                     Ports portBindings = hostConfig.getPortBindings();
                     if (portBindings == null) {
                         portBindings = new Ports();
                     }
-                    portBindings.bind(new ExposedPort(NSQD_TCP_PORT),
-                            Ports.Binding.bindPort(NSQD_TCP_PORT));
+                    portBindings.bind(new ExposedPort(nsqdTcpPort),
+                            Ports.Binding.bindPort(nsqdTcpPort));
                     hostConfig.withPortBindings(portBindings);
                 })
                 .waitingFor(Wait.forHttp("/ping").forPort(NSQD_HTTP_PORT));
@@ -129,7 +140,7 @@ public class NSQSourceIntegrationTest {
         log.info("nsqlookupd http {}:{}, nsqd http {}:{}, nsqd tcp {}:{}",
                 nsqlookupd.getHost(), nsqlookupd.getMappedPort(LOOKUPD_HTTP_PORT),
                 nsqd.getHost(), nsqd.getMappedPort(NSQD_HTTP_PORT),
-                nsqd.getHost(), nsqd.getMappedPort(NSQD_TCP_PORT));
+                nsqd.getHost(), nsqd.getMappedPort(nsqdTcpPort));
     }
 
     @AfterClass(alwaysRun = true)
@@ -238,20 +249,36 @@ public class NSQSourceIntegrationTest {
         return config;
     }
 
+    /** Picks an ephemeral free port on the host for nsqd's advertised TCP listener. */
+    private static int findFreePort() {
+        try (ServerSocket socket = new ServerSocket(0)) {
+            return socket.getLocalPort();
+        } catch (IOException e) {
+            throw new IllegalStateException("could not allocate a free port for nsqd", e);
+        }
+    }
+
     private boolean lookupHasProducer(String topic) {
+        HttpURLConnection conn = null;
         try {
             URL url = new URL("http://" + nsqlookupd.getHost() + ":"
                     + nsqlookupd.getMappedPort(LOOKUPD_HTTP_PORT) + "/lookup?topic=" + topic);
-            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+            conn = (HttpURLConnection) url.openConnection();
             conn.setConnectTimeout(5000);
             conn.setReadTimeout(5000);
             if (conn.getResponseCode() != 200) {
                 return false;
             }
-            String body = new String(conn.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-            return body.contains("\"broadcast_address\"");
+            try (InputStream in = conn.getInputStream()) {
+                String body = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+                return body.contains("\"broadcast_address\"");
+            }
         } catch (IOException e) {
             return false;
+        } finally {
+            if (conn != null) {
+                conn.disconnect();
+            }
         }
     }
 
@@ -259,20 +286,26 @@ public class NSQSourceIntegrationTest {
         URL url = new URL("http://" + nsqd.getHost() + ":"
                 + nsqd.getMappedPort(NSQD_HTTP_PORT) + path);
         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-        conn.setRequestMethod("POST");
-        conn.setConnectTimeout(5000);
-        conn.setReadTimeout(5000);
-        if (body != null) {
-            conn.setDoOutput(true);
-            byte[] payload = body.getBytes(StandardCharsets.UTF_8);
-            try (OutputStream os = conn.getOutputStream()) {
-                os.write(payload);
+        try {
+            conn.setRequestMethod("POST");
+            conn.setConnectTimeout(5000);
+            conn.setReadTimeout(5000);
+            if (body != null) {
+                conn.setDoOutput(true);
+                byte[] payload = body.getBytes(StandardCharsets.UTF_8);
+                try (OutputStream os = conn.getOutputStream()) {
+                    os.write(payload);
+                }
             }
+            int code = conn.getResponseCode();
+            if (code != 200) {
+                throw new IOException("nsqd POST " + path + " failed with HTTP " + code);
+            }
+            try (InputStream in = conn.getInputStream()) {
+                in.readAllBytes();
+            }
+        } finally {
+            conn.disconnect();
         }
-        int code = conn.getResponseCode();
-        if (code != 200) {
-            throw new IOException("nsqd POST " + path + " failed with HTTP " + code);
-        }
-        conn.getInputStream().readAllBytes();
     }
 }
