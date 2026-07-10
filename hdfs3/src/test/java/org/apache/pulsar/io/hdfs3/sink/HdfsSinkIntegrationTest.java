@@ -192,32 +192,45 @@ public class HdfsSinkIntegrationTest {
         config.put("separator", SEPARATOR);
         config.put("encoding", "UTF-8");
         // A sync interval long enough that the background thread does not tick before we close()
-        // (writes take milliseconds), so close() runs the final hsync()/ack path with records still
-        // queued — the bug scenario. Kept modest because close() joins the sync thread, which sleeps
-        // this long before exiting.
-        config.put("syncInterval", 5_000L);
+        // (enqueuing the records takes milliseconds), so close() runs the final hsync()/ack path
+        // with records still queued — the bug scenario. Kept small because close() joins the sync
+        // thread, which sleeps this long before exiting, so it directly adds to the suite runtime.
+        config.put("syncInterval", 1_000L);
 
         SinkContext sinkContext = mock(SinkContext.class);
         AtomicInteger ackCount = new AtomicInteger(0);
 
         HdfsStringSink sink = new HdfsStringSink();
         sink.open(config, sinkContext);
-        for (String value : values) {
-            sink.write(mockRecord(value, ackCount));
+        boolean closed = false;
+        try {
+            for (String value : values) {
+                sink.write(mockRecord(value, ackCount));
+            }
+
+            // Under the old ordering this threw ClosedChannelException; it must now commit cleanly.
+            sink.close();
+            closed = true;
+
+            Assert.assertEquals(ackCount.get(), values.size(),
+                    "close() should have flushed and acked every queued record");
+
+            StringBuilder expected = new StringBuilder();
+            for (String value : values) {
+                expected.append(value).append(SEPARATOR);
+            }
+            Assert.assertEquals(readSinkOutput(directory), expected.toString(),
+                    "records written before close() must be committed to HDFS");
+        } finally {
+            if (!closed) {
+                // Failure path: close so the non-daemon HdfsSyncThread cannot outlive the test.
+                try {
+                    sink.close();
+                } catch (Exception e) {
+                    log.warn("Failed to close sink on the error path", e);
+                }
+            }
         }
-
-        // Under the old ordering this threw ClosedChannelException; it must now commit cleanly.
-        sink.close();
-
-        Assert.assertEquals(ackCount.get(), values.size(),
-                "close() should have flushed and acked every queued record");
-
-        StringBuilder expected = new StringBuilder();
-        for (String value : values) {
-            expected.append(value).append(SEPARATOR);
-        }
-        Assert.assertEquals(readSinkOutput(directory), expected.toString(),
-                "records written before close() must be committed to HDFS");
     }
 
     /**
