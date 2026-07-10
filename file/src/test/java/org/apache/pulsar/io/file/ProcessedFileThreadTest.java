@@ -90,16 +90,16 @@ public class ProcessedFileThreadTest extends AbstractFileTest {
 
             for (File produced : producedFiles) {
                 verify(workQueue, times(1)).offer(produced);
-                verify(inProcess, times(1)).add(produced);
+                verify(inProcess, times(1)).put(produced);
                 verify(inProcess, times(1)).remove(produced);
-                verify(recentlyProcessed, times(1)).add(produced);
+                verify(recentlyProcessed, times(1)).put(produced);
             }
 
             verify(workQueue, times(1)).offer(any(File.class));
             verify(workQueue, atLeast(1)).take();
-            verify(inProcess, times(1)).add(any(File.class));
+            verify(inProcess, times(1)).put(any(File.class));
             verify(inProcess, times(1)).remove(any(File.class));
-            verify(recentlyProcessed, times(1)).add(any(File.class));
+            verify(recentlyProcessed, times(1)).put(any(File.class));
             verify(recentlyProcessed, times(2)).take();
         } catch (InterruptedException | ExecutionException e) {
             fail("Unable to generate files" + e.getLocalizedMessage());
@@ -129,17 +129,17 @@ public class ProcessedFileThreadTest extends AbstractFileTest {
 
             for (File produced : producedFiles) {
                 verify(workQueue, times(1)).offer(produced);
-                verify(inProcess, times(1)).add(produced);
+                verify(inProcess, times(1)).put(produced);
                 verify(inProcess, times(1)).remove(produced);
-                verify(recentlyProcessed, times(1)).add(produced);
+                verify(recentlyProcessed, times(1)).put(produced);
             }
 
             verify(workQueue, times(50)).offer(any(File.class));
             verify(workQueue, atLeast(50)).take();
-            verify(inProcess, times(50)).add(any(File.class));
+            verify(inProcess, times(50)).put(any(File.class));
             verify(inProcess, times(50)).remove(any(File.class));
-            verify(recentlyProcessed, times(50)).add(any(File.class));
-            verify(recentlyProcessed, times(50)).add(any(File.class));
+            verify(recentlyProcessed, times(50)).put(any(File.class));
+            verify(recentlyProcessed, times(50)).put(any(File.class));
             verify(recentlyProcessed, times(51)).take();
         } catch (InterruptedException | ExecutionException e) {
             fail("Unable to generate files" + e.getLocalizedMessage());
@@ -170,9 +170,9 @@ public class ProcessedFileThreadTest extends AbstractFileTest {
 
             for (File produced : producedFiles) {
                 verify(workQueue, atLeast(4)).offer(produced);
-                verify(inProcess, atLeast(4)).add(produced);
+                verify(inProcess, atLeast(4)).put(produced);
                 verify(inProcess, atLeast(4)).remove(produced);
-                verify(recentlyProcessed, atLeast(4)).add(produced);
+                verify(recentlyProcessed, atLeast(4)).put(produced);
             }
 
             verify(recentlyProcessed, atLeast(5)).take();
@@ -218,9 +218,9 @@ public class ProcessedFileThreadTest extends AbstractFileTest {
             // Make sure every single file was processed.
             for (File produced : producedFiles) {
                 verify(workQueue, times(1)).offer(produced);
-                verify(inProcess, times(1)).add(produced);
+                verify(inProcess, times(1)).put(produced);
                 verify(inProcess, times(1)).remove(produced);
-                verify(recentlyProcessed, times(1)).add(produced);
+                verify(recentlyProcessed, times(1)).put(produced);
             }
 
         } catch (InterruptedException e) {
@@ -271,9 +271,9 @@ public class ProcessedFileThreadTest extends AbstractFileTest {
             // Make sure every single file was processed exactly once.
             for (File produced : producedFiles) {
                 verify(workQueue, times(1)).offer(produced);
-                verify(inProcess, times(1)).add(produced);
+                verify(inProcess, times(1)).put(produced);
                 verify(inProcess, times(1)).remove(produced);
-                verify(recentlyProcessed, times(1)).add(produced);
+                verify(recentlyProcessed, times(1)).put(produced);
             }
 
         } catch (InterruptedException e) {
@@ -322,9 +322,9 @@ public class ProcessedFileThreadTest extends AbstractFileTest {
             // Make sure every single file was processed.
             for (File produced : producedFiles) {
                 verify(workQueue, times(1)).offer(produced);
-                verify(inProcess, times(1)).add(produced);
+                verify(inProcess, times(1)).put(produced);
                 verify(inProcess, times(1)).remove(produced);
-                verify(recentlyProcessed, times(1)).add(produced);
+                verify(recentlyProcessed, times(1)).put(produced);
 
                 assert(!produced.exists());
                 assert(new File(produced.getAbsolutePath() + processedFileSuffix).exists());

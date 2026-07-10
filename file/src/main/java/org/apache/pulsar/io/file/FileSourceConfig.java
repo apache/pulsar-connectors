@@ -176,7 +176,9 @@ public class FileSourceConfig implements Serializable {
             throw new IllegalArgumentException("The property numWorkers must be greater than zero");
         }
 
-        if (maxQueueSize != null && maxQueueSize <= 0) {
+        // FileSource.open() unboxes maxQueueSize to size the bounded queues, so an explicit null
+        // would be an NPE there rather than a config error here.
+        if (maxQueueSize == null || maxQueueSize <= 0) {
             throw new IllegalArgumentException("The property maxQueueSize must be greater than zero");
         }
 

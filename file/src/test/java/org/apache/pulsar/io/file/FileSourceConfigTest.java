@@ -147,7 +147,7 @@ public class FileSourceConfigTest {
     @Test
     public void testDefaultMaxQueueSize() throws Exception {
         Map<String, Object> map = new HashMap<>();
-        map.put("inputDirectory", "/tmp"); // Dummy directory just to pass basic validation
+        map.put("inputDirectory", INPUT_DIRECTORY);
 
         FileSourceConfig config = FileSourceConfig.load(map);
 
@@ -158,7 +158,7 @@ public class FileSourceConfigTest {
     @Test
     public void testValidMaxQueueSize() throws Exception {
         Map<String, Object> map = new HashMap<>();
-        map.put("inputDirectory", "/tmp");
+        map.put("inputDirectory", INPUT_DIRECTORY);
         map.put("maxQueueSize", 5000);
 
         FileSourceConfig config = FileSourceConfig.load(map);
@@ -173,7 +173,7 @@ public class FileSourceConfigTest {
     @Test
     public void testInvalidMaxQueueSize() {
         Map<String, Object> map = new HashMap<>();
-        map.put("inputDirectory", "/tmp");
+        map.put("inputDirectory", INPUT_DIRECTORY);
 
         // Test 0
         map.put("maxQueueSize", 0);
@@ -184,6 +184,23 @@ public class FileSourceConfigTest {
 
         // Test Negative Number
         map.put("maxQueueSize", -5);
+        assertThrows(IllegalArgumentException.class, () -> {
+            FileSourceConfig config = FileSourceConfig.load(map);
+            config.validate();
+        });
+    }
+
+    /**
+     * An explicit null must be rejected by validate(), not deferred to FileSource.open(),
+     * which unboxes maxQueueSize to size the bounded queues and would throw a
+     * NullPointerException instead of a useful config error.
+     */
+    @Test
+    public void testNullMaxQueueSizeRejected() {
+        Map<String, Object> map = new HashMap<>();
+        map.put("inputDirectory", INPUT_DIRECTORY);
+        map.put("maxQueueSize", null);
+
         assertThrows(IllegalArgumentException.class, () -> {
             FileSourceConfig config = FileSourceConfig.load(map);
             config.validate();
