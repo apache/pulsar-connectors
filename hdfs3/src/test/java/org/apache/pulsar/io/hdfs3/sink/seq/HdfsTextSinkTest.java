@@ -19,9 +19,9 @@
 package org.apache.pulsar.io.hdfs3.sink.seq;
 
 import static org.mockito.Mockito.times;
-import java.util.concurrent.TimeUnit;
 import static org.mockito.Mockito.verify;
 import static org.testng.Assert.assertNotNull;
+import java.util.concurrent.TimeUnit;
 import org.apache.pulsar.io.hdfs3.sink.AbstractHdfsSinkTest;
 import org.awaitility.Awaitility;
 import org.testng.SkipException;
