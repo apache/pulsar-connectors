@@ -18,6 +18,7 @@
  */
 package org.apache.pulsar.io.kafka;
 
+import com.google.common.annotations.VisibleForTesting;
 import io.jsonwebtoken.io.Encoders;
 import java.time.Duration;
 import java.util.Collections;
@@ -65,9 +66,11 @@ public abstract class KafkaAbstractSource<V> extends PushSource<V> {
     private KafkaSourceConfig kafkaSourceConfig;
     private Thread runnerThread;
     private long maxPollIntervalMs;
+    private volatile Thread instanceThread;
 
     @Override
     public void open(Map<String, Object> config, SourceContext sourceContext) throws Exception {
+        this.instanceThread = Thread.currentThread();
         kafkaSourceConfig = KafkaSourceConfig.load(config, sourceContext);
         Objects.requireNonNull(kafkaSourceConfig.getTopic(), "Kafka topic is not set");
         Objects.requireNonNull(kafkaSourceConfig.getBootstrapServers(), "Kafka bootstrapServers is not set");
@@ -163,12 +166,31 @@ public abstract class KafkaAbstractSource<V> extends PushSource<V> {
         LOG.info("Kafka source stopped.");
     }
 
+    @VisibleForTesting
+    void setInstanceThread(Thread instanceThread) {
+        this.instanceThread = instanceThread;
+    }
+
+    @VisibleForTesting
+    void setKafkaSourceConfig(KafkaSourceConfig kafkaSourceConfig) {
+        this.kafkaSourceConfig = kafkaSourceConfig;
+    }
+
+    @VisibleForTesting
+    void setConsumer(Consumer<Object, Object> consumer) {
+        this.consumer = consumer;
+    }
+
     @SuppressWarnings("unchecked")
     public void start() {
         LOG.info("Starting subscribe kafka source on {}", kafkaSourceConfig.getTopic());
+
+        // 1. REVERT: Keep subscribe on the main thread so initialization errors fail synchronously
         consumer.subscribe(Collections.singletonList(kafkaSourceConfig.getTopic()));
+
         runnerThread = new Thread(() -> {
             LOG.info("Kafka source started.");
+
             while (running) {
                 try {
                     ConsumerRecords<Object, Object> consumerRecords = consumer.poll(Duration.ofSeconds(1L));
@@ -184,20 +206,41 @@ public abstract class KafkaAbstractSource<V> extends PushSource<V> {
                         index++;
                     }
                     if (!kafkaSourceConfig.isAutoCommitEnabled()) {
-                        // Wait about 2/3 of the time of maxPollIntervalMs.
-                        // so as to avoid waiting for the timeout to be kicked out of the consumer group.
                         CompletableFuture.allOf(futures).get(maxPollIntervalMs * 2 / 3, TimeUnit.MILLISECONDS);
                         consumer.commitSync();
                     }
                 } catch (Exception e) {
+                    if (!running) {
+                        LOG.info("Kafka source is shutting down gracefully. Ignoring interrupt.");
+                        break;
+                    }
+
                     LOG.error("Error while processing records", e);
                     notifyError(e);
+
+                    // Fire the flare to break the I/O deadlock
+                    if (instanceThread != null && instanceThread.isAlive()) {
+                        LOG.warn("Interrupting the Instance Thread to break I/O deadlock.");
+                        instanceThread.interrupt();
+                    }
                     break;
                 }
             }
         });
         running = true;
         runnerThread.setName("Kafka Source Thread");
+
+        // Update the UncaughtExceptionHandler
+        runnerThread.setUncaughtExceptionHandler((t, e) -> {
+            LOG.error("[{}] Uncaught error while consuming records", t.getName(), e);
+            notifyError(new RuntimeException(e));
+
+            if (running && instanceThread != null && instanceThread.isAlive()) {
+                LOG.warn("Interrupting the Instance Thread due to uncaught consumer thread exception.");
+                instanceThread.interrupt();
+            }
+        });
+
         runnerThread.start();
     }
 

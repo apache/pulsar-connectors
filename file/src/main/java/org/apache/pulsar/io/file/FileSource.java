@@ -36,18 +36,24 @@ import org.apache.pulsar.io.core.SourceContext;
 public class FileSource extends PushSource<byte[]> {
 
     private ExecutorService executor;
-    private final BlockingQueue<File> workQueue = new LinkedBlockingQueue<>();
-    private final BlockingQueue<File> inProcess = new LinkedBlockingQueue<>();
-    private final BlockingQueue<File> recentlyProcessed = new LinkedBlockingQueue<>();
+    private BlockingQueue<File> workQueue;
+    private BlockingQueue<File> inProcess;
+    private BlockingQueue<File> recentlyProcessed;
 
     @Override
     public void open(Map<String, Object> config, SourceContext sourceContext) throws Exception {
         FileSourceConfig fileConfig = FileSourceConfig.load(config);
         fileConfig.validate();
 
-        // One extra for the File listing thread, and another for the cleanup thread
+        // Initialize bounded queues based on configuration to prevent OOM
+        int queueCapacity = fileConfig.getMaxQueueSize();
+        workQueue = new LinkedBlockingQueue<>(queueCapacity);
+        inProcess = new LinkedBlockingQueue<>(queueCapacity);
+        recentlyProcessed = new LinkedBlockingQueue<>(queueCapacity);
+
+        // One extra for the File listing task, and another for the cleanup thread
         executor = Executors.newFixedThreadPool(fileConfig.getNumWorkers() + 2);
-        executor.execute(new FileListingThread(fileConfig, workQueue, inProcess, recentlyProcessed));
+        executor.execute(new FileListingTask(fileConfig, workQueue, inProcess, recentlyProcessed));
         executor.execute(new ProcessedFileThread(fileConfig, recentlyProcessed));
 
         for (int idx = 0; idx < fileConfig.getNumWorkers(); idx++) {

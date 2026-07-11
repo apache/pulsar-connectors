@@ -114,10 +114,27 @@ public class KafkaSinkConfig implements Serializable {
                             + "Since the serializer will be set by a specific implementation of `KafkaAbstractSink`.")
     private String valueSerializerClass = "org.apache.kafka.common.serialization.ByteArraySerializer";
     @FieldDoc(
+            required = false,
+            defaultValue = "false",
+            help = "If true, the Pulsar message properties are copied into the Kafka record headers (each property "
+                    + "name becomes a header key, the value is UTF-8 encoded). Useful with the Kinesis source "
+                    + "messageKeyMode=SHARD_ID: the Kafka message key carries the shardId for ordered routing while the "
+                    + "original partition key is preserved in the 'kinesis.partition.key' header for consumers.")
+    private boolean copyHeadersEnabled = false;
+
+    @FieldDoc(
             defaultValue = "",
             help =
-                    "The producer config properties to be passed to Producer. Note that other properties specified "
-                            + "in the connector config file take precedence over this config.")
+                    "The producer config properties to be passed to Producer. Note that most properties specified "
+                            + "in the connector config file (bootstrapServers, acks, batchSize, etc.) take precedence "
+                            + "over entries in this map. Exception: if 'enable.idempotence=true' is set here, the "
+                            + "sink will enforce acks=all and ignore the top-level acks field, because Kafka's "
+                            + "idempotent producer requires acks=all. "
+                            + "To preserve per-shard ordering when routing Kinesis records to Kafka, set "
+                            + "'enable.idempotence=true' and 'max.in.flight.requests.per.connection=1' (or <=5 for "
+                            + "Kafka >= 1.0.0 with idempotence) in this map, and configure the Kinesis source with "
+                            + "messageKeyMode=SHARD_ID so that all records from the same shard share a key and land "
+                            + "on the same Kafka partition in arrival order.")
     private Map<String, Object> producerConfigProperties;
 
     public static KafkaSinkConfig load(String yamlFile) throws IOException {

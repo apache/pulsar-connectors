@@ -34,4 +34,6 @@ dependencies {
     implementation(libs.avro)
     implementation(libs.commons.lang3)
     implementation(libs.commons.collections4)
+
+    testImplementation(libs.testcontainers)
 }

@@ -35,4 +35,7 @@ dependencies {
     implementation(libs.aws.sdk2.regions)
     implementation(libs.aws.sdk2.utils)
     implementation(libs.dynamodb.streams.kinesis.adapter)
+
+    testImplementation(libs.testcontainers.localstack)
+    testImplementation(libs.awaitility)
 }

@@ -21,20 +21,24 @@ package org.apache.pulsar.io.debezium.postgres;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertNotNull;
-import static org.testng.Assert.assertTrue;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.Statement;
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.pulsar.client.api.PulsarClient;
 import org.apache.pulsar.common.schema.KeyValue;
 import org.apache.pulsar.functions.api.Record;
 import org.apache.pulsar.io.core.SourceContext;
-import org.awaitility.Awaitility;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.containers.PulsarContainer;
 import org.testcontainers.utility.DockerImageName;
@@ -48,13 +52,20 @@ public class DebeziumPostgresSourceTest {
     private static final String PULSAR_IMAGE =
             System.getenv().getOrDefault("PULSAR_TEST_IMAGE", "apachepulsar/pulsar:4.1.3");
 
+    /** Rows seeded before open(), each of which the initial snapshot must emit. */
+    private static final int EXPECTED_RECORDS = 2;
+
+    private static final int READ_TIMEOUT_SECONDS = 120;
+
     private PostgreSQLContainer<?> postgresContainer;
     private PulsarContainer pulsarContainer;
     private PulsarClient pulsarClient;
     private DebeziumPostgresSource source;
+    private ExecutorService readerExecutor;
 
     @BeforeMethod
     public void setup() throws Exception {
+        readerExecutor = Executors.newSingleThreadExecutor();
         postgresContainer = new PostgreSQLContainer<>(DockerImageName.parse("postgres:16"))
                 .withDatabaseName("testdb")
                 .withUsername("debezium")
@@ -62,10 +73,12 @@ public class DebeziumPostgresSourceTest {
                 .withCommand("postgres",
                         "-c", "wal_level=logical",
                         "-c", "max_wal_senders=4",
-                        "-c", "max_replication_slots=4");
+                        "-c", "max_replication_slots=4")
+                .withStartupTimeout(Duration.ofMinutes(5));
         postgresContainer.start();
 
-        pulsarContainer = new PulsarContainer(DockerImageName.parse(PULSAR_IMAGE));
+        pulsarContainer = new PulsarContainer(DockerImageName.parse(PULSAR_IMAGE))
+                .withStartupTimeout(Duration.ofMinutes(5));
         pulsarContainer.start();
 
         pulsarClient = PulsarClient.builder()
@@ -89,6 +102,10 @@ public class DebeziumPostgresSourceTest {
 
     @AfterMethod(alwaysRun = true)
     public void cleanup() throws Exception {
+        if (readerExecutor != null) {
+            // shutdownNow: a reader may still be blocked in read(), which never returns null
+            readerExecutor.shutdownNow();
+        }
         if (source != null) {
             try {
                 source.close();
@@ -107,7 +124,7 @@ public class DebeziumPostgresSourceTest {
         }
     }
 
-    @Test
+    @Test(timeOut = 600_000)
     public void testPostgresCdcEvents() throws Exception {
         String pulsarServiceUrl = pulsarContainer.getPulsarBrokerUrl();
 
@@ -134,23 +151,35 @@ public class DebeziumPostgresSourceTest {
 
         // Debezium performs an initial snapshot of existing data.
         // We should receive CDC records for the 2 rows we inserted.
-        Awaitility.await()
-                .atMost(60, TimeUnit.SECONDS)
-                .pollInterval(500, TimeUnit.MILLISECONDS)
-                .untilAsserted(() -> {
-                    int recordCount = 0;
-                    Record<KeyValue<byte[], byte[]>> record;
-                    while ((record = source.read()) != null) {
-                        assertNotNull(record.getValue());
-                        log.info("Received CDC record: key={}", record.getKey().orElse(null));
-                        recordCount++;
-                        record.ack();
-                        if (recordCount >= 2) {
-                            break;
-                        }
-                    }
-                    assertTrue(recordCount >= 2,
-                            "Expected at least 2 CDC records from initial snapshot, got " + recordCount);
-                });
+        int received = 0;
+        for (int i = 0; i < EXPECTED_RECORDS; i++) {
+            Record<KeyValue<byte[], byte[]>> record = readOne();
+            assertNotNull(record.getValue());
+            log.info("Received CDC record: key={}", record.getKey().orElse(null));
+            record.ack();
+            received++;
+        }
+        assertEquals(received, EXPECTED_RECORDS);
+    }
+
+    /**
+     * Reads a single record, failing if none arrives in time.
+     *
+     * <p>{@code AbstractKafkaConnectSource.read()} loops until a record is available and never
+     * returns null, so calling it on the test thread means an under-delivering connector hangs
+     * the test — and, since Awaitility cannot interrupt a blocked assertion, the whole CI job
+     * until its own timeout. Run it on a separate thread so a missing record surfaces as a
+     * prompt, diagnosable failure instead.
+     */
+    private Record<KeyValue<byte[], byte[]>> readOne() throws Exception {
+        Future<Record<KeyValue<byte[], byte[]>>> future = readerExecutor.submit(() -> source.read());
+        try {
+            return future.get(READ_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        } catch (TimeoutException e) {
+            future.cancel(true);
+            throw new AssertionError("Timed out after " + READ_TIMEOUT_SECONDS
+                    + "s waiting for a CDC record from the initial snapshot. "
+                    + "The connector produced no record; see the Debezium logs above.", e);
+        }
     }
 }

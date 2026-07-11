@@ -94,7 +94,7 @@ public abstract class AerospikeAbstractSink<K, V> implements Sink<byte[]> {
         KeyValue<K, V> keyValue = extractKeyValue(record);
         Key key = new Key(aerospikeSinkConfig.getKeyspace(), aerospikeSinkConfig.getKeySet(),
                 keyValue.getKey().toString());
-        Bin bin = new Bin(aerospikeSinkConfig.getColumnName(), Value.getAsBlob(keyValue.getValue()));
+        Bin bin = new Bin(aerospikeSinkConfig.getColumnName(), Value.get(keyValue.getValue()));
         AWriteListener listener = null;
         try {
             listener = queue.take();

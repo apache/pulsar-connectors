@@ -26,6 +26,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import com.google.common.collect.Maps;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.pulsar.client.api.Message;
@@ -39,6 +40,7 @@ import org.apache.pulsar.client.impl.schema.generic.GenericSchemaImpl;
 import org.apache.pulsar.functions.api.Record;
 import org.apache.pulsar.functions.source.PulsarRecord;
 import org.apache.pulsar.io.core.SinkContext;
+import org.awaitility.Awaitility;
 import org.influxdb.InfluxDB;
 import org.influxdb.dto.BatchPoints;
 import org.mockito.Mock;
@@ -150,8 +152,8 @@ public class InfluxDBGenericRecordSinkTest {
 
         influxSink.write(record);
 
-        Thread.sleep(1000);
-
-        verify(influxDB, times(1)).write(any(BatchPoints.class));
+        // BatchSink flushes on a background executor; poll rather than racing it.
+        Awaitility.await().atMost(30, TimeUnit.SECONDS)
+                .untilAsserted(() -> verify(influxDB, times(1)).write(any(BatchPoints.class)));
     }
 }

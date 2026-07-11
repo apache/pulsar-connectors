@@ -23,6 +23,7 @@ import static org.testng.Assert.assertEquals;
 import com.datastax.driver.core.Cluster;
 import com.datastax.driver.core.Row;
 import com.datastax.driver.core.Session;
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -49,7 +50,8 @@ public class CassandraStringSinkTest {
 
     @BeforeMethod
     public void setUp() {
-        cassandraContainer = new CassandraContainer<>("cassandra:4.1");
+        cassandraContainer = new CassandraContainer<>("cassandra:4.1")
+                .withStartupTimeout(Duration.ofMinutes(3));
         cassandraContainer.start();
 
         // Create keyspace and table

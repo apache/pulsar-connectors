@@ -27,4 +27,10 @@ dependencies {
     implementation(libs.jackson.dataformat.yaml)
     implementation(libs.aerospike.client)
     implementation(libs.bcpkix.jdk18on)
+
+    testImplementation(libs.testcontainers)
+    // The Aerospike 4.5.0 client uses javax.xml.bind.DatatypeConverter (removed from the JDK
+    // since Java 11) when parsing partition maps. Pulsar's runtime supplies JAXB in production;
+    // the test classpath must provide it explicitly.
+    testRuntimeOnly(libs.jakarta.xml.bind.api)
 }
