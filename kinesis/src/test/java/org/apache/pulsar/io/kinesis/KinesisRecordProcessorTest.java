@@ -127,8 +127,8 @@ public class KinesisRecordProcessorTest {
     }
 
     @Test
-    public void testIncidentScenarioOutOfOrderAcksAcrossSequences() throws Exception {
-        // Mirrors INCIDENT 3800: distinct sequence numbers delivered in order seq-100, seq-101, seq-102.
+    public void testOutOfOrderAcksAcrossSequenceNumbers() throws Exception {
+        // Distinct sequence numbers are delivered in order seq-100, seq-101, seq-102.
         recordProcessor.initialize(createMockInitializationInput());
         verify(checkpointExecutor, Mockito.times(1))
                 .schedule(scheduledTaskCaptor.capture(), anyLong(), any(TimeUnit.class));

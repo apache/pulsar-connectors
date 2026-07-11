@@ -163,7 +163,7 @@ public class KinesisRecordProcessor implements ShardRecordProcessor {
         // be delivered downstream must keep blocking the contiguous-prefix collapse so the checkpoint can
         // never advance past it. fatal() terminates the connector, which reprocesses from the last checkpoint.
         numRecordsInFlight.decrementAndGet();
-        sourceContext.fatal(new PulsarClientException("Failed to process Kinesis records due send to pulsar topic"));
+        sourceContext.fatal(new PulsarClientException("Failed to send Kinesis record to Pulsar topic"));
     }
 
     @Override

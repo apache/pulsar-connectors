@@ -166,7 +166,7 @@ public class KinesisSourceConfig extends BaseKinesisConfig implements Serializab
         help = "Which value to use as the Pulsar message key for each record. "
                 + "PARTITION_KEY (default) uses the Kinesis record partition key (preserves existing downstream "
                 + "partitioning). SHARD_ID routes all records of a Kinesis shard to the same key, keeping them on "
-                + "one downstream partition to preserve per-shard ordering and reduce checkpoint reordering/gap; "
+                + "one downstream partition to preserve per-shard ordering and reduce checkpoint reordering gaps; "
                 + "note this changes downstream partition distribution and may create hot partitions.")
     private MessageKeyMode messageKeyMode = MessageKeyMode.PARTITION_KEY;
 
