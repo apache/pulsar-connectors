@@ -84,7 +84,8 @@ public class SolrSinkConfig implements Serializable {
     @FieldDoc(
             required = false,
             defaultValue = "false",
-            help = "If true, the sink will attempt to extract the nested 'after' field from CDC/Debezium records."
+            help = "If true, the sink will unwrap Debezium CDC records (including KeyValue payloads) and " +
+                    "index the row state from the 'after' field; DELETE events are propagated as Solr deletes."
     )
     private boolean unwrapDebeziumRecord = false;
 

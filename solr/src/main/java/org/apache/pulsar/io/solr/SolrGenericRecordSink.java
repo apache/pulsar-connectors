@@ -53,8 +53,10 @@ public class SolrGenericRecordSink extends SolrAbstractSink<GenericRecord> {
             return mapDebeziumPayload(messageValue, solrDocument);
         }
 
-        // Default mapping for non-CDC messages now uses the same safe population logic
-        populateSolrFields(messageValue, solrDocument);
+        // Legacy mapping for non-CDC messages to maintain backward compatibility
+        for (Field field : messageValue.getFields()) {
+            solrDocument.setField(field.getName(), messageValue.getField(field));
+        }
         return solrDocument;
     }
 
@@ -141,16 +143,16 @@ public class SolrGenericRecordSink extends SolrAbstractSink<GenericRecord> {
         Object beforeField = envelopeRecord.getField("before");
 
         if (!(beforeField instanceof GenericRecord)) {
-            log.warn("DELETE event received, but 'before' field is missing or invalid.");
-            return null;
+            throw new IllegalArgumentException("DELETE event received, but 'before' field is missing or invalid.");
         }
 
         GenericRecord beforeRecord = (GenericRecord) beforeField;
         List<Field> fields = beforeRecord.getFields();
 
         if (fields.isEmpty()) {
-            log.warn("DELETE event received, but 'before' record has no fields to extract ID.");
-            return null;
+            throw new IllegalArgumentException(
+                    "DELETE event received, but 'before' record has no fields to extract ID."
+            );
         }
 
         // Safe identifier lookup strategy: Look for a field explicitly named "id" first
@@ -161,8 +163,7 @@ public class SolrGenericRecordSink extends SolrAbstractSink<GenericRecord> {
 
         Object id = beforeRecord.getField(targetIdField);
         if (id == null) {
-            log.warn("DELETE event received, but primary key field value was null.");
-            return null;
+            throw new IllegalArgumentException("DELETE event received, but primary key field value was null.");
         }
 
         // We now let the exception bubble up to mapDebeziumPayload so the parent class fails the record
@@ -215,7 +216,7 @@ public class SolrGenericRecordSink extends SolrAbstractSink<GenericRecord> {
      * compatibility with Solr's field requirements.
      */
     private Object normalizeValue(Object value) {
-        if (value instanceof Integer || value instanceof Long) {
+        if (value instanceof Number) {
             return String.valueOf(value);
         }
         return value;

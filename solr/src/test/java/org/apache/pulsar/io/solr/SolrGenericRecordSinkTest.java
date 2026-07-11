@@ -18,7 +18,11 @@
  */
 package org.apache.pulsar.io.solr;
 
+
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -38,7 +42,9 @@ import org.apache.pulsar.common.schema.KeyValue;
 import org.apache.pulsar.functions.api.Record;
 import org.apache.pulsar.functions.source.PulsarRecord;
 import org.apache.solr.client.solrj.SolrClient;
+import org.apache.solr.client.solrj.SolrRequest;
 import org.apache.solr.common.SolrInputDocument;
+import org.apache.solr.common.util.NamedList;
 import org.testng.Assert;
 import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeMethod;
@@ -198,6 +204,8 @@ public class SolrGenericRecordSinkTest {
 
         // Create a mocked SolrClient to simulate a successful network response
         SolrClient mockSolrClient = mock(SolrClient.class);
+        when(mockSolrClient.request(any(SolrRequest.class), eq("techproducts")))
+                .thenReturn(new NamedList<>());
 
         // Override getSolrClient to inject our mock and bypass real HTTP calls
         SolrGenericRecordSink mockNetworkSink = new SolrGenericRecordSink() {
@@ -238,6 +246,9 @@ public class SolrGenericRecordSinkTest {
 
         // Process the convert using the mocked network sink
         SolrInputDocument doc = mockNetworkSink.convert(mockMessage);
+
+        // Verify that the deletion request was actually issued to the mocked Solr client
+        verify(mockSolrClient).request(any(SolrRequest.class), eq("techproducts"));
 
         // In our refactored logic, a DELETE returns null so the parent class can ACK it
         Assert.assertNull(doc, "Document should be null for DELETE events to trigger ACK");
