@@ -114,8 +114,8 @@ public class RabbitMQSource extends PushSource<byte[]> {
                 throws IOException {
             long deliveryTag = envelope.getDeliveryTag();
             Map<String, String> pulsarProperties = new HashMap<>();
-            pulsarProperties.put("consumerTag", consumerTag);
-            pulsarProperties.put("queueName", queueName);
+            pulsarProperties.put("__rabbitmq_consumer_tag", consumerTag);
+            pulsarProperties.put("__rabbitmq_queue_name", queueName);
             source.consume(new RabbitMQRecord(Optional.ofNullable(envelope.getRoutingKey()), body, () -> {
                 // acknowledge this delivery tag to RabbitMQ
                 try {

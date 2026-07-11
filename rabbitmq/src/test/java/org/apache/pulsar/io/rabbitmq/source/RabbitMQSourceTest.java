@@ -99,7 +99,7 @@ public class RabbitMQSourceTest {
 
             Record<byte[]> record = source.read();
             assertEquals("hello", new String(record.getValue(), StandardCharsets.UTF_8));
-            assertEquals(queue, record.getProperties().get("queueName"));
+            assertEquals(queue, record.getProperties().get("__rabbitmq_queue_name"));
             record.ack();
         } finally {
             source.close();
