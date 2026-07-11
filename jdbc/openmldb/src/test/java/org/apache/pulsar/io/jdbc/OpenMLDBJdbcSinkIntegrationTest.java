@@ -105,7 +105,24 @@ public class OpenMLDBJdbcSinkIntegrationTest {
     }
 
     @BeforeClass(alwaysRun = true)
-    public void setUp() throws Exception {
+public void setUp() throws Exception {
+        final String osName = System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT);
+        final String osArch = System.getProperty("os.arch", "").toLowerCase(java.util.Locale.ROOT);
+        if (!osName.contains("linux") || !(osArch.equals("amd64") || osArch.equals("x86_64"))) {
+            throw new org.testng.SkipException(
+                    "Skipping OpenMLDB JDBC integration test: requires Linux x86-64 (native openmldb SDK + host-network Docker)."
+            );
+        }
+        // Host networking requires binding ZooKeeper to localhost:2181; skip if the port is already in use.
+        try (java.net.ServerSocket ss = new java.net.ServerSocket()) {
+            ss.setReuseAddress(false);
+            ss.bind(new java.net.InetSocketAddress("127.0.0.1", 2181));
+        } catch (java.io.IOException e) {
+            throw new org.testng.SkipException(
+                    "Skipping OpenMLDB JDBC integration test: port 2181 is already in use on localhost.",
+                    e
+            );
+        }
         // Host networking (Linux only): binds OpenMLDB's ports on localhost so the endpoints zk
         // advertises are reachable from this JVM. The image's init.sh deploys and starts the
         // cluster (zk on localhost:2181, zkPath /openmldb) and prints "OpenMLDB start success".
