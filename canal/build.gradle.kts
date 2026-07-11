@@ -35,4 +35,14 @@ dependencies {
     implementation("com.alibaba.otter:canal.protocol:1.1.7")
     implementation("com.alibaba.otter:canal.client:1.1.7")
     implementation(libs.log4j.core)
+
+    testImplementation(libs.testcontainers)
+    // Exclude protobuf: mysql-connector-j drags protobuf-java 4.x (X DevAPI, unused by plain JDBC)
+    // onto the test classpath, where it outranks the platform's 3.25.5. canal's generated
+    // CanalPacket code calls GeneratedMessageV3.makeExtensionsImmutable(), which protobuf 4.x
+    // removed, so the canal client would throw NoSuchMethodError on connect(). With the exclusion
+    // the test runs against the same protobuf line the Pulsar runtime provides to the NAR.
+    testImplementation(libs.mysql.connector.j) {
+        exclude(group = "com.google.protobuf", module = "protobuf-java")
+    }
 }
