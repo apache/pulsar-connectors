@@ -109,6 +109,10 @@ public class RabbitMQSourceConfig extends RabbitMQAbstractConfig implements Seri
     public void validate() {
         super.validate();
         Preconditions.checkNotNull(queueName, "queueName property not set.");
+        Preconditions.checkArgument(!passive || !queueName.isEmpty(),
+                "queueName must be non-empty when passive is true.");
+        Preconditions.checkArgument(exchangeName == null || exchangeName.isEmpty() || routingKey != null,
+                "routingKey must not be null when exchangeName is set.");
         Preconditions.checkArgument(prefetchCount >= 0, "prefetchCount must be non-negative.");
     }
 }

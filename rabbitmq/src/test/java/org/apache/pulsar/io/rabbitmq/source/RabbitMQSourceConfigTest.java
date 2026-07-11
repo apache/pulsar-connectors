@@ -161,25 +161,41 @@ public class RabbitMQSourceConfigTest {
 
     @Test
     public final void validValidateTest() throws IOException {
-        Map<String, Object> map = new HashMap<>();
-        map.put("host", "localhost");
-        map.put("port", "5672");
-        map.put("virtualHost", "/");
-        map.put("username", "guest");
-        map.put("password", "guest");
-        map.put("queueName", "test-queue");
-        map.put("connectionName", "test-connection");
-        map.put("requestedChannelMax", "0");
-        map.put("requestedFrameMax", "0");
-        map.put("connectionTimeout", "60000");
-        map.put("handshakeTimeout", "10000");
-        map.put("requestedHeartbeat", "60");
-        map.put("prefetchCount", "0");
-        map.put("prefetchGlobal", "false");
-        map.put("passive", "false");
+        RabbitMQSourceConfig config = validConfig();
+        config.validate();
+    }
 
-        SourceContext sourceContext = Mockito.mock(SourceContext.class);
-        RabbitMQSourceConfig config = RabbitMQSourceConfig.load(map, sourceContext);
+    @Test
+    public final void emptyQueueNameForNonPassiveDeclarationValidateTest() throws IOException {
+        RabbitMQSourceConfig config = validConfig()
+                .setQueueName("")
+                .setPassive(false);
+        config.validate();
+    }
+
+    @Test
+    public final void emptyRoutingKeyWithExchangeValidateTest() throws IOException {
+        RabbitMQSourceConfig config = validConfig()
+                .setExchangeName("test-exchange")
+                .setRoutingKey("");
+        config.validate();
+    }
+
+    @Test(expectedExceptions = IllegalArgumentException.class,
+        expectedExceptionsMessageRegExp = "queueName must be non-empty when passive is true\\.")
+    public final void emptyQueueNameForPassiveDeclarationValidateTest() throws IOException {
+        RabbitMQSourceConfig config = validConfig()
+                .setQueueName("")
+                .setPassive(true);
+        config.validate();
+    }
+
+    @Test(expectedExceptions = IllegalArgumentException.class,
+        expectedExceptionsMessageRegExp = "routingKey must not be null when exchangeName is set\\.")
+    public final void nullRoutingKeyWithExchangeValidateTest() throws IOException {
+        RabbitMQSourceConfig config = validConfig()
+                .setExchangeName("test-exchange")
+                .setRoutingKey(null);
         config.validate();
     }
 
@@ -250,6 +266,26 @@ public class RabbitMQSourceConfigTest {
         SourceContext sourceContext = Mockito.mock(SourceContext.class);
         RabbitMQSourceConfig config = RabbitMQSourceConfig.load(map, sourceContext);
         config.validate();
+    }
+
+    private RabbitMQSourceConfig validConfig() throws IOException {
+        Map<String, Object> map = new HashMap<>();
+        map.put("host", "localhost");
+        map.put("port", "5672");
+        map.put("virtualHost", "/");
+        map.put("username", "guest");
+        map.put("password", "guest");
+        map.put("queueName", "test-queue");
+        map.put("connectionName", "test-connection");
+        map.put("requestedChannelMax", "0");
+        map.put("requestedFrameMax", "0");
+        map.put("connectionTimeout", "60000");
+        map.put("handshakeTimeout", "10000");
+        map.put("requestedHeartbeat", "60");
+        map.put("prefetchCount", "0");
+        map.put("prefetchGlobal", "false");
+        map.put("passive", "false");
+        return RabbitMQSourceConfig.load(map, Mockito.mock(SourceContext.class));
     }
 
     private File getFile(String name) {
