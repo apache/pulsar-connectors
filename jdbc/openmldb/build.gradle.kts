@@ -47,4 +47,15 @@ dependencies {
     implementation(project(":jdbc:pulsar-io-jdbc-core"))
     runtimeOnly(libs.openmldb.jdbc)
     runtimeOnly(libs.openmldb.native)
+
+    // Integration test: the OpenMLDB JDBC driver's native SDK is Linux x86-64 only, so this test
+    // only runs on Linux/CI — see OpenMLDBJdbcSinkIntegrationTest.
+    testImplementation(libs.testcontainers)
+    testImplementation(libs.pulsar.client)
+    testImplementation(libs.pulsar.functions.instance)
+    testImplementation(libs.avro)
+    // The JDBC driver + native SDK must be on the TEST classpath (they are runtimeOnly for the
+    // NAR, which is not built for unit tests).
+    testRuntimeOnly(libs.openmldb.jdbc)
+    testRuntimeOnly(libs.openmldb.native)
 }
