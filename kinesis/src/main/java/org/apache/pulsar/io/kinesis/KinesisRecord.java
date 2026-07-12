@@ -43,9 +43,19 @@ public class KinesisRecord implements Record<byte[]> {
     private final long subSequenceNumber;
     private final KinesisRecordProcessor recordProcessor;
 
+    /** Convenience overload that defaults to {@link KinesisSourceConfig.MessageKeyMode#PARTITION_KEY}. */
     public KinesisRecord(KinesisClientRecord record, String shardId, long millisBehindLatest,
                          Set<String> propertiesToInclude, KinesisRecordProcessor recordProcessor) {
-        this.key = Optional.of(record.partitionKey());
+        this(record, shardId, millisBehindLatest, propertiesToInclude, recordProcessor,
+                KinesisSourceConfig.MessageKeyMode.PARTITION_KEY);
+    }
+
+    public KinesisRecord(KinesisClientRecord record, String shardId, long millisBehindLatest,
+                         Set<String> propertiesToInclude, KinesisRecordProcessor recordProcessor,
+                         KinesisSourceConfig.MessageKeyMode messageKeyMode) {
+        this.key = (messageKeyMode == KinesisSourceConfig.MessageKeyMode.SHARD_ID)
+                ? Optional.of(shardId)
+                : Optional.of(record.partitionKey());
         this.sequenceNumber = record.sequenceNumber();
         this.subSequenceNumber = record.subSequenceNumber();
         this.recordProcessor = recordProcessor;
