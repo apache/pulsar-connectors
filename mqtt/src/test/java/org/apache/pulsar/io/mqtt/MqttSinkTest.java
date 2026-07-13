@@ -98,6 +98,21 @@ public class MqttSinkTest {
         assertEquals(sink.resolveTopic(record), "test/topic");
     }
 
+    @Test
+    public void resolveTopicShouldFallBackToDefaultTopicWhenPropertiesNull() {
+        Map<String, Object> config = baseConfigMap();
+        config.put("topicProperty", "mqttTopic");
+        MqttSink sink = newSinkWithOpenedClient(mock(Mqtt5AsyncClient.class), config);
+
+        TestRecord record = new TestRecord(
+                "x".getBytes(),
+                new CountDownLatch(1),
+                new AtomicBoolean(false),
+                null);
+
+        assertEquals(sink.resolveTopic(record), "test/topic");
+    }
+
     private MqttSink newSinkWithOpenedClient(Mqtt5AsyncClient mqttClient) {
         return newSinkWithOpenedClient(mqttClient, baseConfigMap());
     }

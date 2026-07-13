@@ -122,7 +122,11 @@ public class MqttSink implements Sink<byte[]> {
         if (StringUtils.isBlank(topicProperty)) {
             return defaultTopic;
         }
-        String dynamicTopic = record.getProperties().get(topicProperty);
+        Map<String, String> properties = record.getProperties();
+        if (properties == null) {
+            return defaultTopic;
+        }
+        String dynamicTopic = properties.get(topicProperty);
         return StringUtils.isNotBlank(dynamicTopic) ? dynamicTopic : defaultTopic;
     }
 
