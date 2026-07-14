@@ -19,9 +19,14 @@
 package org.apache.pulsar.io.kafka;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.kafka.common.header.Header;
+import org.apache.kafka.common.header.internals.RecordHeader;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.kafka.clients.CommonClientConfigs;
 import org.apache.kafka.clients.producer.KafkaProducer;
@@ -48,13 +53,10 @@ public abstract class KafkaAbstractSink<K, V> implements Sink<byte[]> {
 
     @Override
     public void write(Record<byte[]> sourceRecord) {
-        KeyValue<K, V> keyValue = extractKeyValue(sourceRecord);
-        ProducerRecord<K, V> record = new ProducerRecord<>(kafkaSinkConfig.getTopic(), keyValue.getKey(),
-                keyValue.getValue());
+        ProducerRecord<K, V> record = buildProducerRecord(sourceRecord);
         if (log.isDebugEnabled()) {
             log.debug("Record sending to kafka, record={}.", record);
         }
-
         producer.send(record, (metadata, exception) -> {
             if (exception == null) {
                 sourceRecord.ack();
@@ -62,6 +64,23 @@ public abstract class KafkaAbstractSink<K, V> implements Sink<byte[]> {
                 sourceRecord.fail();
             }
         });
+    }
+
+    // protected (NOT package-private) so the test subclass can expose it; package-private would be invisible
+    // because the test lives in package org.apache.pulsar.io.kafka.sink.
+    protected ProducerRecord<K, V> buildProducerRecord(Record<byte[]> sourceRecord) {
+        KeyValue<K, V> keyValue = extractKeyValue(sourceRecord);
+        Map<String, String> properties = sourceRecord.getProperties();
+        if (!kafkaSinkConfig.isCopyHeadersEnabled() || properties == null || properties.isEmpty()) {
+            return new ProducerRecord<>(kafkaSinkConfig.getTopic(), keyValue.getKey(), keyValue.getValue());
+        }
+        List<Header> headers = new ArrayList<>(properties.size());
+        for (Map.Entry<String, String> entry : properties.entrySet()) {
+            if (entry.getKey() != null && entry.getValue() != null) {
+                headers.add(new RecordHeader(entry.getKey(), entry.getValue().getBytes(StandardCharsets.UTF_8)));
+            }
+        }
+        return new ProducerRecord<>(kafkaSinkConfig.getTopic(), null, keyValue.getKey(), keyValue.getValue(), headers);
     }
 
     @Override
@@ -114,7 +133,23 @@ public abstract class KafkaAbstractSink<K, V> implements Sink<byte[]> {
         if (StringUtils.isNotEmpty(kafkaSinkConfig.getSslTruststorePassword())) {
             props.put(SslConfigs.SSL_TRUSTSTORE_PASSWORD_CONFIG, kafkaSinkConfig.getSslTruststorePassword());
         }
-        props.put(ProducerConfig.ACKS_CONFIG, kafkaSinkConfig.getAcks());
+        // If the user has enabled idempotent production (via producerConfigProperties), Kafka
+        // requires acks=all. Do not silently downgrade acks in that case; instead enforce all.
+        // Without idempotence the configured acks value is applied as before.
+        boolean idempotenceEnabled = Boolean.parseBoolean(
+                String.valueOf(props.getOrDefault(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, "false")));
+        if (idempotenceEnabled) {
+            Object rawAcks = props.get(ProducerConfig.ACKS_CONFIG);
+            String userAcks = rawAcks != null ? String.valueOf(rawAcks) : null;
+            if (userAcks != null && !userAcks.equals("all") && !userAcks.equals("-1")) {
+                throw new IllegalArgumentException(
+                        "enable.idempotence=true requires acks=all, but acks was set to: " + userAcks);
+            }
+            // Enforce acks=all when idempotence is enabled; ignore the top-level acks field.
+            props.put(ProducerConfig.ACKS_CONFIG, "all");
+        } else {
+            props.put(ProducerConfig.ACKS_CONFIG, kafkaSinkConfig.getAcks());
+        }
         props.put(ProducerConfig.BATCH_SIZE_CONFIG, String.valueOf(kafkaSinkConfig.getBatchSize()));
         props.put(ProducerConfig.MAX_REQUEST_SIZE_CONFIG, String.valueOf(kafkaSinkConfig.getMaxRequestSize()));
         props.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, kafkaSinkConfig.getKeySerializerClass());

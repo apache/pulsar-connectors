@@ -24,16 +24,21 @@ import static org.testng.Assert.fail;
 import java.io.File;
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Properties;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import org.apache.kafka.clients.producer.ProducerConfig;
+import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.config.ConfigException;
+import org.apache.kafka.common.header.Header;
 import org.apache.kafka.common.security.auth.SecurityProtocol;
 import org.apache.pulsar.client.api.PulsarClient;
 import org.apache.pulsar.common.io.SinkConfig;
@@ -52,6 +57,141 @@ public class KafkaAbstractSinkTest {
         @Override
         public KeyValue<String, byte[]> extractKeyValue(Record<byte[]> record) {
             return new KeyValue<>(record.getKey().orElse(null), record.getValue());
+        }
+    }
+
+    /**
+     * A DummySink variant that captures the final producer props (after all open() merging logic)
+     * so tests can assert on the resolved configuration without needing a live broker.
+     */
+    private static class CapturingSink extends KafkaAbstractSink<String, byte[]> {
+        Properties capturedProps;
+
+        @Override
+        public KeyValue<String, byte[]> extractKeyValue(Record<byte[]> record) {
+            return new KeyValue<>(record.getKey().orElse(null), record.getValue());
+        }
+
+        @Override
+        protected Properties beforeCreateProducer(Properties props) {
+            capturedProps = new Properties();
+            capturedProps.putAll(props);
+            return props;
+        }
+    }
+
+    /**
+     * DummySink variant that exposes buildProducerRecord() for direct unit testing, so tests can
+     * assert on header propagation logic without needing a live Kafka broker.
+     */
+    private static class HeaderCapturingSink extends KafkaAbstractSink<String, byte[]> {
+
+        @Override
+        public KeyValue<String, byte[]> extractKeyValue(Record<byte[]> record) {
+            return new KeyValue<>(record.getKey().orElse(null), record.getValue());
+        }
+
+        public ProducerRecord<String, byte[]> buildRecordForTest(Record<byte[]> r) {
+            return buildProducerRecord(r);
+        }
+    }
+
+    /** Creates an anonymous Record<byte[]> with the given key, value, and properties. */
+    private static Record<byte[]> makeRecord(String key, byte[] value, Map<String, String> properties) {
+        return new Record<byte[]>() {
+            @Override
+            public Optional<String> getKey() {
+                return Optional.ofNullable(key);
+            }
+
+            @Override
+            public byte[] getValue() {
+                return value;
+            }
+
+            @Override
+            public Map<String, String> getProperties() {
+                return properties;
+            }
+        };
+    }
+
+    @Test
+    public void testCopyHeadersDisabledByDefaultProducesNoHeaders() throws Exception {
+        HeaderCapturingSink sink = new HeaderCapturingSink();
+        Map<String, Object> config = validConfig();
+        // copyHeadersEnabled is NOT set — default false
+        sink.open(config, makeSinkContext());
+        try {
+            Map<String, String> props = new HashMap<>();
+            props.put("kinesis.partition.key", "userA");
+            Record<byte[]> record = makeRecord("shard-1", "payload".getBytes(StandardCharsets.UTF_8), props);
+
+            ProducerRecord<String, byte[]> produced = sink.buildRecordForTest(record);
+
+            assertEquals(produced.key(), "shard-1");
+            // No headers should be present when copyHeadersEnabled=false
+            int headerCount = 0;
+            for (Header ignored : produced.headers()) {
+                headerCount++;
+            }
+            assertEquals(headerCount, 0, "Expected no headers when copyHeadersEnabled=false");
+        } finally {
+            sink.close();
+        }
+    }
+
+    @Test
+    public void testCopyHeadersEnabledPropagatesPropertiesAsHeaders() throws Exception {
+        HeaderCapturingSink sink = new HeaderCapturingSink();
+        Map<String, Object> config = validConfig();
+        config.put("copyHeadersEnabled", true);
+        sink.open(config, makeSinkContext());
+        try {
+            Map<String, String> props = new HashMap<>();
+            props.put("kinesis.partition.key", "userA");
+            props.put("kinesis.shard.id", "shard-1");
+            Record<byte[]> record = makeRecord("shard-1", "payload".getBytes(StandardCharsets.UTF_8), props);
+
+            ProducerRecord<String, byte[]> produced = sink.buildRecordForTest(record);
+
+            assertEquals(produced.key(), "shard-1");
+
+            // Collect produced headers into a map for easy assertion
+            Map<String, byte[]> headerMap = new HashMap<>();
+            for (Header h : produced.headers()) {
+                headerMap.put(h.key(), h.value());
+            }
+
+            assertEquals(headerMap.size(), 2, "Expected exactly 2 headers");
+            assertEquals(
+                    new String(headerMap.get("kinesis.partition.key"), StandardCharsets.UTF_8),
+                    "userA",
+                    "kinesis.partition.key header must carry the original partition key");
+        } finally {
+            sink.close();
+        }
+    }
+
+    @Test
+    public void testCopyHeadersEnabledWithEmptyPropertiesProducesNoHeaders() throws Exception {
+        HeaderCapturingSink sink = new HeaderCapturingSink();
+        Map<String, Object> config = validConfig();
+        config.put("copyHeadersEnabled", true);
+        sink.open(config, makeSinkContext());
+        try {
+            Record<byte[]> record = makeRecord("key1", "data".getBytes(StandardCharsets.UTF_8),
+                    Collections.emptyMap());
+
+            ProducerRecord<String, byte[]> produced = sink.buildRecordForTest(record);
+
+            int headerCount = 0;
+            for (Header ignored : produced.headers()) {
+                headerCount++;
+            }
+            assertEquals(headerCount, 0, "Expected no headers when properties map is empty");
+        } finally {
+            sink.close();
         }
     }
 
@@ -303,6 +443,79 @@ public class KafkaAbstractSinkTest {
         assertEquals(config.getSslEndpointIdentificationAlgorithm(), "");
         assertEquals(config.getSslTruststoreLocation(), "/etc/cert.pem");
         assertEquals(config.getSslTruststorePassword(), "cert_pwd");
+    }
+
+    /**
+     * Verifies that setting enable.idempotence=true in producerConfigProperties results in
+     * acks=all in the final producer configuration (the top-level acks field must NOT clobber it).
+     */
+    @Test
+    public void testIdempotenceEnabledSetsAcksAll() throws Exception {
+        CapturingSink sink = new CapturingSink();
+        Map<String, Object> config = validConfig();
+        // acks=1 at top level; idempotence=true in producerConfigProperties
+        Map<String, Object> extraProps = new HashMap<>();
+        extraProps.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, "true");
+        config.put("producerConfigProperties", extraProps);
+
+        sink.open(config, makeSinkContext());
+        sink.close();
+
+        assertEquals("all", sink.capturedProps.getProperty(ProducerConfig.ACKS_CONFIG),
+                "acks must be 'all' when enable.idempotence=true");
+    }
+
+    /**
+     * Verifies that setting enable.idempotence=true together with an explicit conflicting acks
+     * value in producerConfigProperties yields a clear IllegalArgumentException rather than a
+     * cryptic Kafka ConfigException.
+     */
+    @Test
+    public void testIdempotenceWithConflictingAcksThrows() throws Exception {
+        CapturingSink sink = new CapturingSink();
+        Map<String, Object> config = validConfig();
+        Map<String, Object> extraProps = new HashMap<>();
+        extraProps.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, "true");
+        extraProps.put(ProducerConfig.ACKS_CONFIG, "1");
+        config.put("producerConfigProperties", extraProps);
+
+        expectThrows(IllegalArgumentException.class,
+                "enable.idempotence=true requires acks=all, but acks was set to: 1",
+                () -> {
+                    try {
+                        sink.open(config, makeSinkContext());
+                    } finally {
+                        sink.close();
+                    }
+                });
+    }
+
+    /** Minimal no-op SinkContext for use in unit tests. */
+    private static SinkContext makeSinkContext() {
+        return new SinkContext() {
+            @Override public int getInstanceId() { return 0; }
+            @Override public int getNumInstances() { return 0; }
+            @Override public void recordMetric(String metricName, double value) {}
+            @Override public Collection<String> getInputTopics() { return null; }
+            @Override public SinkConfig getSinkConfig() { return null; }
+            @Override public String getTenant() { return null; }
+            @Override public String getNamespace() { return null; }
+            @Override public String getSinkName() { return null; }
+            @Override public Logger getLogger() { return null; }
+            @Override public String getSecret(String key) { return null; }
+            @Override public void incrCounter(String key, long amount) {}
+            @Override public CompletableFuture<Void> incrCounterAsync(String key, long amount) { return null; }
+            @Override public long getCounter(String key) { return 0; }
+            @Override public CompletableFuture<Long> getCounterAsync(String key) { return null; }
+            @Override public void putState(String key, ByteBuffer value) {}
+            @Override public CompletableFuture<Void> putStateAsync(String key, ByteBuffer value) { return null; }
+            @Override public ByteBuffer getState(String key) { return null; }
+            @Override public CompletableFuture<ByteBuffer> getStateAsync(String key) { return null; }
+            @Override public void deleteState(String key) {}
+            @Override public CompletableFuture<Void> deleteStateAsync(String key) { return null; }
+            @Override public PulsarClient getPulsarClient() { return null; }
+            @Override public void fatal(Throwable t) {}
+        };
     }
 
     private File getFile(String name) {

@@ -211,4 +211,29 @@ public class KinesisSourceConfigTest {
         Set<String> properties = config.getPropertiesToInclude();
         assertTrue(properties.isEmpty());
     }
+
+    @Test
+    public final void messageKeyModeDefaultsToPartitionKey() {
+        Map<String, Object> map = new HashMap<>();
+        map.put("awsRegion", "us-west-1");
+        map.put("awsKinesisStreamName", "my-stream");
+        map.put("awsCredentialPluginParam", "{\"accessKey\":\"myKey\",\"secretKey\":\"my-Secret\"}");
+
+        KinesisSourceConfig config = KinesisSourceConfig.load(map, Mockito.mock(SourceContext.class));
+
+        assertEquals(config.getMessageKeyMode(), KinesisSourceConfig.MessageKeyMode.PARTITION_KEY);
+    }
+
+    @Test
+    public final void messageKeyModeDeserializesShardIdFromString() {
+        Map<String, Object> map = new HashMap<>();
+        map.put("awsRegion", "us-west-1");
+        map.put("awsKinesisStreamName", "my-stream");
+        map.put("awsCredentialPluginParam", "{\"accessKey\":\"myKey\",\"secretKey\":\"my-Secret\"}");
+        map.put("messageKeyMode", "SHARD_ID");
+
+        KinesisSourceConfig config = KinesisSourceConfig.load(map, Mockito.mock(SourceContext.class));
+
+        assertEquals(config.getMessageKeyMode(), KinesisSourceConfig.MessageKeyMode.SHARD_ID);
+    }
 }

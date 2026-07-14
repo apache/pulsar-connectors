@@ -24,6 +24,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.hadoop.hbase.client.Get;
@@ -46,6 +47,7 @@ import org.apache.pulsar.functions.source.PulsarRecord;
 import org.apache.pulsar.functions.source.PulsarSourceConfig;
 import org.apache.pulsar.io.core.SinkContext;
 import org.apache.pulsar.io.hbase.TableUtils;
+import org.awaitility.Awaitility;
 import org.mockito.Mock;
 import org.testng.Assert;
 import org.testng.annotations.Test;
@@ -155,12 +157,13 @@ public class HbaseGenericRecordSinkTest {
         // write should success.
         sink.write(record);
         log.info("executed write");
-        // sleep to wait backend flush complete
-        Thread.sleep(500);
-
-        // value has been written to hbase table, read it out and verify.
+        // The sink flushes on a background executor; poll for the row rather than racing it.
         Table table = TableUtils.getTable(map);
         Get scan = new Get(Bytes.toBytes(obj.getRowKey()));
+        Awaitility.await().atMost(30, TimeUnit.SECONDS)
+                .pollInterval(100, TimeUnit.MILLISECONDS)
+                .until(() -> !table.get(scan).isEmpty());
+
         Result result = table.get(scan);
         byte[] byteName = result.getValue(Bytes.toBytes(familyName), Bytes.toBytes(name));
         byte[] byteAddress = result.getValue(Bytes.toBytes(familyName), Bytes.toBytes(address));

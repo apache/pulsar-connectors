@@ -21,6 +21,15 @@ plugins {
     id("pulsar-connectors.java-conventions")
     id("pulsar-connectors.nar-conventions")
 }
+
+// hbase-client references io.opentelemetry.semconv.SemanticAttributes when building a trace span
+// on every table operation. That class was removed after the ~1.30 semconv line, but the shared
+// platform force-upgrades semconv to 1.37.0, so the sink throws NoClassDefFoundError on its first
+// HBase call. Drop the platform-managed version and pin the version hbase-client actually needs.
+pulsarConnectorsDependencies {
+    exclude(libs.opentelemetry.semconv)
+}
+
 dependencies {
     implementation(libs.pulsar.io.core)
     implementation(libs.pulsar.functions.instance)
@@ -30,4 +39,7 @@ dependencies {
     implementation(libs.guava)
     implementation(libs.hbase.client)
     implementation(libs.hbase.common)
+    implementation("io.opentelemetry.semconv:opentelemetry-semconv:1.29.0-alpha")
+
+    testImplementation(libs.testcontainers)
 }

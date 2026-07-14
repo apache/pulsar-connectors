@@ -25,6 +25,7 @@ import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.Statement;
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -82,7 +83,8 @@ public class MariadbJdbcSinkIntegrationTest {
 
     @BeforeClass(alwaysRun = true)
     public void setUp() throws Exception {
-        mariadb = new MariaDBContainer<>(MARIADB_IMAGE);
+        mariadb = new MariaDBContainer<>(MARIADB_IMAGE)
+                .withStartupTimeout(Duration.ofMinutes(3));
         mariadb.start();
 
         // Create the destination table over plain JDBC.

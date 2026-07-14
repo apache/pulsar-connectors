@@ -42,8 +42,10 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 import org.apache.pulsar.functions.api.Record;
 import org.apache.pulsar.io.core.SinkContext;
+import org.awaitility.Awaitility;
 import org.bson.BsonDocument;
 import org.mockito.Mock;
 import org.reactivestreams.Publisher;
@@ -149,9 +151,9 @@ public class MongoSinkTest {
         sink.open(map, mockSinkContext);
         sink.write(mockRecord);
 
-        Thread.sleep(1000);
-
-        verify(mockRecord, times(1)).fail();
+        // The sink flushes on a background executor; poll rather than racing it.
+        Awaitility.await().atMost(30, TimeUnit.SECONDS)
+                .untilAsserted(() -> verify(mockRecord, times(1)).fail());
     }
 
     @Test
@@ -161,9 +163,9 @@ public class MongoSinkTest {
         sink.open(map, mockSinkContext);
         sink.write(mockRecord);
 
-        Thread.sleep(1000);
-
-        verify(mockRecord, times(1)).ack();
+        // The sink flushes on a background executor; poll rather than racing it.
+        Awaitility.await().atMost(30, TimeUnit.SECONDS)
+                .untilAsserted(() -> verify(mockRecord, times(1)).ack());
     }
 
     @Test
@@ -175,10 +177,12 @@ public class MongoSinkTest {
         sink.write(mockRecord);
         sink.write(mockRecord);
 
-        Thread.sleep(1000);
-
-        verify(mockRecord, times(2)).ack();
-        verify(mockRecord, times(1)).fail();
+        // The sink flushes on a background executor; poll rather than racing it.
+        Awaitility.await().atMost(30, TimeUnit.SECONDS)
+                .untilAsserted(() -> {
+                    verify(mockRecord, times(2)).ack();
+                    verify(mockRecord, times(1)).fail();
+                });
     }
 
     @Test
@@ -188,9 +192,9 @@ public class MongoSinkTest {
         sink.open(map, mockSinkContext);
         sink.write(mockRecord);
 
-        Thread.sleep(1000);
-
-        verify(mockRecord, times(1)).fail();
+        // The sink flushes on a background executor; poll rather than racing it.
+        Awaitility.await().atMost(30, TimeUnit.SECONDS)
+                .untilAsserted(() -> verify(mockRecord, times(1)).fail());
     }
 
     @Test
@@ -200,8 +204,8 @@ public class MongoSinkTest {
         sink.open(map, mockSinkContext);
         sink.write(mockRecord);
 
-        Thread.sleep(1000);
-
-        verify(mockRecord, times(1)).fail();
+        // The sink flushes on a background executor; poll rather than racing it.
+        Awaitility.await().atMost(30, TimeUnit.SECONDS)
+                .untilAsserted(() -> verify(mockRecord, times(1)).fail());
     }
 }

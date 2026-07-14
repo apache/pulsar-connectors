@@ -48,8 +48,21 @@ public abstract class HdfsAbstractTextFileSink<K, V> extends HdfsAbstractSink<K,
 
     @Override
     public void close() throws Exception {
-        writer.close();
-        super.close();
+        // Flush buffered bytes to the HDFS stream, then let the superclass halt the sync thread and
+        // run its final hsync()/ack while the stream is still open. Closing the writer first (the
+        // previous order) closed the stream before that final hsync(), throwing
+        // ClosedChannelException whenever unacked records remained at close time. The writer is
+        // closed in finally so the underlying stream is released even if super.close() throws.
+        try {
+            if (writer != null) {
+                writer.flush();
+            }
+            super.close();
+        } finally {
+            if (writer != null) {
+                writer.close();
+            }
+        }
     }
 
     @Override

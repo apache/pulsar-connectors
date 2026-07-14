@@ -24,6 +24,7 @@ import com.influxdb.client.InfluxDBClient;
 import com.influxdb.client.InfluxDBClientFactory;
 import com.influxdb.query.FluxRecord;
 import com.influxdb.query.FluxTable;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.List;
@@ -98,7 +99,8 @@ public class InfluxDBSinkIntegrationTest {
                 .withEnv("DOCKER_INFLUXDB_INIT_ORG", ORG)
                 .withEnv("DOCKER_INFLUXDB_INIT_BUCKET", BUCKET)
                 .withEnv("DOCKER_INFLUXDB_INIT_ADMIN_TOKEN", TOKEN)
-                .waitingFor(Wait.forHttp("/health").forPort(INFLUXDB_PORT).forStatusCode(200));
+                .waitingFor(Wait.forHttp("/health").forPort(INFLUXDB_PORT).forStatusCode(200))
+                .withStartupTimeout(Duration.ofMinutes(3));
         influxdbContainer.start();
 
         influxdbUrl = "http://" + influxdbContainer.getHost() + ":"

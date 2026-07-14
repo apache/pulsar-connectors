@@ -26,6 +26,7 @@ import static org.testng.Assert.assertNotNull;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import com.mongodb.client.MongoCollection;
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
@@ -68,10 +69,12 @@ public class DebeziumMongoDbSourceTest {
         readerExecutor = Executors.newSingleThreadExecutor();
         // MongoDBContainer starts a single-node replica set, which Debezium requires
         // for change streams.
-        mongoContainer = new MongoDBContainer(DockerImageName.parse("mongo:7.0"));
+        mongoContainer = new MongoDBContainer(DockerImageName.parse("mongo:7.0"))
+                .withStartupTimeout(Duration.ofMinutes(5));
         mongoContainer.start();
 
-        pulsarContainer = new PulsarContainer(DockerImageName.parse(PULSAR_IMAGE));
+        pulsarContainer = new PulsarContainer(DockerImageName.parse(PULSAR_IMAGE))
+                .withStartupTimeout(Duration.ofMinutes(5));
         pulsarContainer.start();
 
         pulsarClient = PulsarClient.builder()

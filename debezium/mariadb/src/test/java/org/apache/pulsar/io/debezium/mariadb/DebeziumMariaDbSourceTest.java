@@ -26,6 +26,7 @@ import static org.testng.Assert.assertTrue;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.Statement;
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
@@ -71,10 +72,12 @@ public class DebeziumMariaDbSourceTest {
                         "--binlog-format=ROW",
                         "--server-id=1"
                 )
-                .waitingFor(Wait.forLogMessage(".*ready for connections.*\\s", 2));
+                .waitingFor(Wait.forLogMessage(".*ready for connections.*\\s", 2))
+                .withStartupTimeout(Duration.ofMinutes(5));
         mariadbContainer.start();
 
-        pulsarContainer = new PulsarContainer(DockerImageName.parse(PULSAR_IMAGE));
+        pulsarContainer = new PulsarContainer(DockerImageName.parse(PULSAR_IMAGE))
+                .withStartupTimeout(Duration.ofMinutes(5));
         pulsarContainer.start();
 
         pulsarClient = PulsarClient.builder()

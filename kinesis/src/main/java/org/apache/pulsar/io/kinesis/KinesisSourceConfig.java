@@ -144,6 +144,32 @@ public class KinesisSourceConfig extends BaseKinesisConfig implements Serializab
             + "kinesis.partition.key,kinesis.sequence.number";
     private transient Set<String> propertiesToInclude;
 
+    /**
+     * Determines which value is used as the Pulsar message key for each Kinesis record.
+     */
+    public enum MessageKeyMode {
+        /**
+         * Use the Kinesis record partition key (default; preserves existing downstream partitioning).
+         */
+        PARTITION_KEY,
+        /**
+         * Use the Kinesis shard ID as the message key, routing all records from the same shard to
+         * the same downstream partition. This preserves per-shard ordering and reduces checkpoint
+         * reordering gaps, but may create hot partitions if shard traffic is skewed.
+         */
+        SHARD_ID
+    }
+
+    @FieldDoc(
+        required = false,
+        defaultValue = "PARTITION_KEY",
+        help = "Which value to use as the Pulsar message key for each record. "
+                + "PARTITION_KEY (default) uses the Kinesis record partition key (preserves existing downstream "
+                + "partitioning). SHARD_ID routes all records of a Kinesis shard to the same key, keeping them on "
+                + "one downstream partition to preserve per-shard ordering and reduce checkpoint reordering gaps; "
+                + "note this changes downstream partition distribution and may create hot partitions.")
+    private MessageKeyMode messageKeyMode = MessageKeyMode.PARTITION_KEY;
+
     public static KinesisSourceConfig load(Map<String, Object> config, SourceContext sourceContext) {
         KinesisSourceConfig kinesisSourceConfig = IOConfigUtils.loadWithSecrets(config,
                 KinesisSourceConfig.class, sourceContext);

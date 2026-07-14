@@ -22,6 +22,7 @@ import static org.mockito.Mockito.mock;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertNotNull;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -50,7 +51,8 @@ public class MongoSinkContainerTest {
 
     @BeforeMethod
     public void setUp() {
-        mongoContainer = new MongoDBContainer("mongo:6.0");
+        mongoContainer = new MongoDBContainer("mongo:6.0")
+                .withStartupTimeout(Duration.ofMinutes(3));
         mongoContainer.start();
         sink = new MongoSink();
     }

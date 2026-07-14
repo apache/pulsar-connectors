@@ -18,6 +18,7 @@
  */
 package org.apache.pulsar.io.rabbitmq;
 
+import java.time.Duration;
 import org.testcontainers.containers.RabbitMQContainer;
 import org.testcontainers.utility.DockerImageName;
 
@@ -27,6 +28,7 @@ public class RabbitMQBrokerManager {
     public void startBroker() throws Exception {
         rabbitMQContainer = new RabbitMQContainer(DockerImageName.parse("rabbitmq:3.7.25-management-alpine"));
         rabbitMQContainer.withVhost("default");
+        rabbitMQContainer.withStartupTimeout(Duration.ofMinutes(3));
         rabbitMQContainer.start();
     }
 
