@@ -52,8 +52,14 @@ public class MqttSinkConfig implements Serializable {
     @FieldDoc(
             required = true,
             defaultValue = "",
-            help = "The MQTT topic to publish messages to.")
+            help = "The default MQTT topic to publish messages to when no dynamic topic is available.")
     private String topic;
+
+    @FieldDoc(
+            defaultValue = "",
+            help = "The Pulsar message property key used to resolve the MQTT topic dynamically. "
+                    + "When the property is missing or blank, the configured topic is used as the default.")
+    private String topicProperty;
 
     @FieldDoc(
             defaultValue = "",

@@ -22,10 +22,12 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertTrue;
 import com.hivemq.client.mqtt.mqtt5.Mqtt5AsyncClient;
 import com.hivemq.client.mqtt.mqtt5.message.connect.Mqtt5ConnectBuilder;
 import com.hivemq.client.mqtt.mqtt5.message.connect.connack.Mqtt5ConnAck;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -66,7 +68,56 @@ public class MqttSinkTest {
         new MqttSink().close();
     }
 
+    @Test
+    public void resolveTopicShouldUseDynamicTopicFromRecordProperty() {
+        Map<String, Object> config = baseConfigMap();
+        config.put("topicProperty", "mqttTopic");
+        MqttSink sink = newSinkWithOpenedClient(mock(Mqtt5AsyncClient.class), config);
+
+        TestRecord record = new TestRecord(
+                "x".getBytes(),
+                new CountDownLatch(1),
+                new AtomicBoolean(false),
+                Map.of("mqttTopic", "dynamic/topic"));
+
+        assertEquals(sink.resolveTopic(record), "dynamic/topic");
+    }
+
+    @Test
+    public void resolveTopicShouldFallBackToDefaultTopicWhenPropertyMissing() {
+        Map<String, Object> config = baseConfigMap();
+        config.put("topicProperty", "mqttTopic");
+        MqttSink sink = newSinkWithOpenedClient(mock(Mqtt5AsyncClient.class), config);
+
+        TestRecord record = new TestRecord(
+                "x".getBytes(),
+                new CountDownLatch(1),
+                new AtomicBoolean(false),
+                Collections.emptyMap());
+
+        assertEquals(sink.resolveTopic(record), "test/topic");
+    }
+
+    @Test
+    public void resolveTopicShouldFallBackToDefaultTopicWhenPropertiesNull() {
+        Map<String, Object> config = baseConfigMap();
+        config.put("topicProperty", "mqttTopic");
+        MqttSink sink = newSinkWithOpenedClient(mock(Mqtt5AsyncClient.class), config);
+
+        TestRecord record = new TestRecord(
+                "x".getBytes(),
+                new CountDownLatch(1),
+                new AtomicBoolean(false),
+                null);
+
+        assertEquals(sink.resolveTopic(record), "test/topic");
+    }
+
     private MqttSink newSinkWithOpenedClient(Mqtt5AsyncClient mqttClient) {
+        return newSinkWithOpenedClient(mqttClient, baseConfigMap());
+    }
+
+    private MqttSink newSinkWithOpenedClient(Mqtt5AsyncClient mqttClient, Map<String, Object> config) {
         try {
             @SuppressWarnings("unchecked")
             Mqtt5ConnectBuilder.Send<CompletableFuture<Mqtt5ConnAck>> connectBuilder =
@@ -77,7 +128,7 @@ public class MqttSinkTest {
 
             MqttSink sink = Mockito.spy(new MqttSink());
             doReturn(mqttClient).when(sink).buildClient(any());
-            sink.open(baseConfigMap(), mock(SinkContext.class));
+            sink.open(config, mock(SinkContext.class));
             return sink;
         } catch (Exception e) {
             throw new AssertionError("Failed to initialize MqttSink test fixture", e);
@@ -100,16 +151,28 @@ public class MqttSinkTest {
         private final byte[] value;
         private final CountDownLatch ackLatch;
         private final AtomicBoolean failCalled;
+        private final Map<String, String> properties;
 
         private TestRecord(byte[] value, CountDownLatch ackLatch, AtomicBoolean failCalled) {
+            this(value, ackLatch, failCalled, Collections.emptyMap());
+        }
+
+        private TestRecord(byte[] value, CountDownLatch ackLatch, AtomicBoolean failCalled,
+                           Map<String, String> properties) {
             this.value = value;
             this.ackLatch = ackLatch;
             this.failCalled = failCalled;
+            this.properties = properties;
         }
 
         @Override
         public byte[] getValue() {
             return value;
+        }
+
+        @Override
+        public Map<String, String> getProperties() {
+            return properties;
         }
 
         @Override

@@ -94,10 +94,11 @@ public class MqttSink implements Sink<byte[]> {
 
     @Override
     public void write(Record<byte[]> record) {
+        String topic = resolveTopic(record);
         try {
             byte[] payload = record.getValue() == null ? new byte[0] : record.getValue();
             mqttClient.publishWith()
-                    .topic(mqttSinkConfig.getTopic())
+                    .topic(topic)
                     .qos(mqttQos)
                     .payload(payload)
                     .send()
@@ -106,14 +107,27 @@ public class MqttSink implements Sink<byte[]> {
                             record.ack();
                         } else {
                             record.fail();
-                            log.warn("Failed to publish message to MQTT topic {}",
-                                    mqttSinkConfig.getTopic(), throwable);
+                            log.warn("Failed to publish message to MQTT topic {}", topic, throwable);
                         }
                     });
         } catch (Exception e) {
             record.fail();
-            log.warn("Failed to schedule MQTT publish for topic {}", mqttSinkConfig.getTopic(), e);
+            log.warn("Failed to schedule MQTT publish for topic {}", topic, e);
         }
+    }
+
+    String resolveTopic(Record<byte[]> record) {
+        String defaultTopic = mqttSinkConfig.getTopic();
+        String topicProperty = mqttSinkConfig.getTopicProperty();
+        if (StringUtils.isBlank(topicProperty)) {
+            return defaultTopic;
+        }
+        Map<String, String> properties = record.getProperties();
+        if (properties == null) {
+            return defaultTopic;
+        }
+        String dynamicTopic = properties.get(topicProperty);
+        return StringUtils.isNotBlank(dynamicTopic) ? dynamicTopic : defaultTopic;
     }
 
     @Override
