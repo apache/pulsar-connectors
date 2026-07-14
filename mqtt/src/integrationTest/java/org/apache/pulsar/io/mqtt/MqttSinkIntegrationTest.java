@@ -25,8 +25,8 @@ import static org.testng.Assert.assertTrue;
 import com.hivemq.client.mqtt.MqttClient;
 import com.hivemq.client.mqtt.mqtt5.Mqtt5AsyncClient;
 import java.nio.charset.StandardCharsets;
-import java.util.Collections;
 import java.time.Duration;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.BlockingQueue;
@@ -102,7 +102,7 @@ public class MqttSinkIntegrationTest {
         }
     }
 
-    @Test
+    @Test(timeOut = 120_000)
     public void testWriteE2EWithDynamicTopicProperty() throws Exception {
         String defaultTopic = "pulsar/mqtt/e2e/default";
         String dynamicTopic = "pulsar/mqtt/e2e/device-1";
