@@ -18,13 +18,19 @@
  */
 package org.apache.pulsar.io.solr;
 
+
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.pulsar.client.api.Message;
+import org.apache.pulsar.client.api.schema.Field;
 import org.apache.pulsar.client.api.schema.GenericRecord;
 import org.apache.pulsar.client.api.schema.GenericSchema;
 import org.apache.pulsar.client.impl.MessageImpl;
@@ -32,8 +38,14 @@ import org.apache.pulsar.client.impl.schema.AutoConsumeSchema;
 import org.apache.pulsar.client.impl.schema.AvroSchema;
 import org.apache.pulsar.client.impl.schema.generic.GenericAvroSchema;
 import org.apache.pulsar.client.impl.schema.generic.GenericSchemaImpl;
+import org.apache.pulsar.common.schema.KeyValue;
 import org.apache.pulsar.functions.api.Record;
 import org.apache.pulsar.functions.source.PulsarRecord;
+import org.apache.solr.client.solrj.SolrClient;
+import org.apache.solr.client.solrj.SolrRequest;
+import org.apache.solr.common.SolrInputDocument;
+import org.apache.solr.common.util.NamedList;
+import org.testng.Assert;
 import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
@@ -46,6 +58,8 @@ public class SolrGenericRecordSinkTest {
 
     private SolrServerUtil solrServerUtil;
     private Message<GenericRecord> message;
+    private SolrGenericRecordSink sink;
+    private Map<String, Object> configs;
 
     /**
      * A Simple class to test solr class.
@@ -60,6 +74,14 @@ public class SolrGenericRecordSinkTest {
     public void setUp() throws Exception {
         solrServerUtil = new SolrServerUtil(8983);
         solrServerUtil.startStandaloneSolr();
+        sink = new SolrGenericRecordSink();
+        configs = new HashMap<>();
+        configs.put("solrUrl", "http://localhost:8983/solr");
+        configs.put("solrMode", "Standalone");
+        configs.put("solrCollection", "techproducts");
+        configs.put("solrCommitWithinMs", "100");
+        configs.put("username", "");
+        configs.put("password", "");
     }
 
     @AfterMethod(alwaysRun = true)
@@ -70,13 +92,6 @@ public class SolrGenericRecordSinkTest {
     @Test
     public void testOpenAndWriteSink() throws Exception {
         message = mock(MessageImpl.class);
-        Map<String, Object> configs = new HashMap<>();
-        configs.put("solrUrl", "http://localhost:8983/solr");
-        configs.put("solrMode", "Standalone");
-        configs.put("solrCollection", "techproducts");
-        configs.put("solrCommitWithinMs", "100");
-        configs.put("username", "");
-        configs.put("password", "");
         GenericSchema<GenericRecord> genericAvroSchema;
 
         SolrGenericRecordSink sink = new SolrGenericRecordSink();
@@ -108,5 +123,134 @@ public class SolrGenericRecordSinkTest {
 
         // open should success
         sink.open(configs, null);
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void testDebeziumUnwrapEnvelope() throws Exception {
+        configs.put("unwrapDebeziumRecord", true);
+        sink.open(configs, null);
+
+        // Build root record wrapping a KeyValue payload
+        GenericRecord mockRootRecord = mock(GenericRecord.class);
+        Record<GenericRecord> mockMessage = mock(Record.class);
+        when(mockMessage.getValue()).thenReturn(mockRootRecord);
+
+        GenericRecord mockValueRecord = mock(GenericRecord.class);
+        when(mockRootRecord.getNativeObject()).thenReturn(new KeyValue<>("key", mockValueRecord));
+        // containsAfterField() iterates getFields() - must include "after" field here
+        Field afterSchemaField = mock(Field.class);
+        when(afterSchemaField.getName()).thenReturn("after");
+        Field opField = mock(Field.class);
+        when(opField.getName()).thenReturn("op");
+        when(mockValueRecord.getFields()).thenReturn(Arrays.asList(afterSchemaField, opField));
+
+        // extractAfterRecord() calls getField("after") by string - return nested record
+        GenericRecord mockAfterRecord = mock(GenericRecord.class);
+        when(mockValueRecord.getField("after")).thenReturn(mockAfterRecord);
+
+        // Fields inside the "after" payload to be mapped into Solr document
+        Field idField = mock(Field.class);
+        when(idField.getName()).thenReturn("id");
+        Field userIdField = mock(Field.class);
+        when(userIdField.getName()).thenReturn("user_id");
+        when(mockAfterRecord.getFields()).thenReturn(Arrays.asList(idField, userIdField));
+        when(mockAfterRecord.getField(idField)).thenReturn(100);
+        when(mockAfterRecord.getField(userIdField)).thenReturn(999);
+
+        SolrInputDocument doc = sink.convert(mockMessage);
+
+        Assert.assertNotNull(doc, "Document should not be null for envelope with 'after' field");
+        Assert.assertEquals(doc.getFieldValue("id"), "100");
+        Assert.assertEquals(doc.getFieldValue("user_id"), "999");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void testDebeziumUnwrapFlatValue() throws Exception {
+        configs.put("unwrapDebeziumRecord", true);
+        sink.open(configs, null);
+
+        // Build root record wrapping a KeyValue payload
+        GenericRecord mockRootRecord = mock(GenericRecord.class);
+        Record<GenericRecord> mockMessage = mock(Record.class);
+        when(mockMessage.getValue()).thenReturn(mockRootRecord);
+
+        GenericRecord mockValueRecord = mock(GenericRecord.class);
+        when(mockRootRecord.getNativeObject()).thenReturn(new KeyValue<>("key", mockValueRecord));
+
+        // containsAfterField() will iterate these, no "after" field, so flat path is taken
+        Field idField = mock(Field.class);
+        when(idField.getName()).thenReturn("id");
+        Field profileIdField = mock(Field.class);
+        when(profileIdField.getName()).thenReturn("profile_id");
+        when(mockValueRecord.getFields()).thenReturn(Arrays.asList(idField, profileIdField));
+
+        // populateSolrFields() reads values by Field object reference
+        when(mockValueRecord.getField(idField)).thenReturn(200);
+        when(mockValueRecord.getField(profileIdField)).thenReturn(801);
+        SolrInputDocument doc = sink.convert(mockMessage);
+
+        Assert.assertNotNull(doc, "Document should not be null for flat value record");
+        Assert.assertEquals(doc.getFieldValue("id"), "200");
+        Assert.assertEquals(doc.getFieldValue("profile_id"), "801");
+        Assert.assertNull(doc.getFieldValue("user_id"), "user_id was not provided, should be null");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void testDebeziumUnwrapDelete() throws Exception {
+        configs.put("unwrapDebeziumRecord", true);
+
+        // Create a mocked SolrClient to simulate a successful network response
+        SolrClient mockSolrClient = mock(SolrClient.class);
+        when(mockSolrClient.request(any(SolrRequest.class), eq("techproducts")))
+                .thenReturn(new NamedList<>());
+
+        // Override getSolrClient to inject our mock and bypass real HTTP calls
+        SolrGenericRecordSink mockNetworkSink = new SolrGenericRecordSink() {
+            @Override
+            protected SolrClient getSolrClient() {
+                return mockSolrClient;
+            }
+        };
+
+        mockNetworkSink.open(configs, null);
+
+        // Build root record
+        GenericRecord mockRootRecord = mock(GenericRecord.class);
+        Record<GenericRecord> mockMessage = mock(Record.class);
+        when(mockMessage.getValue()).thenReturn(mockRootRecord);
+
+        GenericRecord mockValueRecord = mock(GenericRecord.class);
+        when(mockRootRecord.getNativeObject()).thenReturn(new KeyValue<>("key", mockValueRecord));
+
+        // Mock Debezium DELETE signature: 'after' is null, 'before' and 'op' are present
+        Field beforeSchemaField = mock(Field.class);
+        when(beforeSchemaField.getName()).thenReturn("before");
+        Field opField = mock(Field.class);
+        when(opField.getName()).thenReturn("op");
+        when(mockValueRecord.getFields()).thenReturn(Arrays.asList(beforeSchemaField, opField));
+
+        // 'after' is null for deletes
+        when(mockValueRecord.getField("after")).thenReturn(null);
+
+        // Mock 'before' record containing the ID to be deleted
+        GenericRecord mockBeforeRecord = mock(GenericRecord.class);
+        when(mockValueRecord.getField("before")).thenReturn(mockBeforeRecord);
+
+        Field idField = mock(Field.class);
+        when(idField.getName()).thenReturn("id");
+        when(mockBeforeRecord.getFields()).thenReturn(Arrays.asList(idField));
+        when(mockBeforeRecord.getField(idField)).thenReturn(500);
+
+        // Process the convert using the mocked network sink
+        SolrInputDocument doc = mockNetworkSink.convert(mockMessage);
+
+        // Verify that the deletion request was actually issued to the mocked Solr client
+        verify(mockSolrClient).request(any(SolrRequest.class), eq("techproducts"));
+
+        // In our refactored logic, a DELETE returns null so the parent class can ACK it
+        Assert.assertNull(doc, "Document should be null for DELETE events to trigger ACK");
     }
 }

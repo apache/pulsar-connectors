@@ -81,6 +81,14 @@ public class SolrSinkConfig implements Serializable {
         help = "The password to use for basic authentication")
     private String password;
 
+    @FieldDoc(
+            required = false,
+            defaultValue = "false",
+            help = "If true, the sink will unwrap Debezium CDC records (including KeyValue payloads) and " +
+                    "index the row state from the 'after' field; DELETE events are propagated as Solr deletes."
+    )
+    private boolean unwrapDebeziumRecord = false;
+
     public static SolrSinkConfig load(String yamlFile) throws IOException {
         ObjectMapper mapper = new ObjectMapper(new YAMLFactory());
         return mapper.readValue(new File(yamlFile), SolrSinkConfig.class);
