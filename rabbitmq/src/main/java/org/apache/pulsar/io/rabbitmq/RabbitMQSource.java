@@ -97,8 +97,12 @@ public class RabbitMQSource extends PushSource<byte[]> {
 
     @Override
     public void close() throws Exception {
-        rabbitMQChannel.close();
-        rabbitMQConnection.close();
+        if (rabbitMQChannel != null) {
+            rabbitMQChannel.close();
+        }
+        if (rabbitMQConnection != null) {
+            rabbitMQConnection.close();
+        }
     }
 
     private class RabbitMQConsumer extends DefaultConsumer {
