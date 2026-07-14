@@ -63,6 +63,39 @@ public class RabbitMQSourceConfig extends RabbitMQAbstractConfig implements Seri
             help = "Set true if the queue should be declared passively - ie to preserve durability/timeout settings")
     private boolean passive = false;
 
+    @FieldDoc(
+            required = false,
+            defaultValue = "false",
+            help = "Set true if the queue should survive a broker restart")
+    private boolean durable = false;
+
+    @FieldDoc(
+            required = false,
+            defaultValue = "false",
+            help = "Set true if the queue can be used by only one connection and get deleted when it closes")
+    private boolean exclusive = false;
+
+    @FieldDoc(
+            required = false,
+            defaultValue = "false",
+            help = "Set true if the queue should get deleted when the last consumer unsubscribes")
+    private boolean autoDelete = false;
+
+    @FieldDoc(
+        required = false,
+        defaultValue = "",
+        help = "The name of an existing exchange to bind the queue to. The exchange must already exist; "
+                + "it is not declared by the connector. Leave empty to consume directly from the queue "
+                + "without binding to an exchange.")
+    private String exchangeName;
+
+    @FieldDoc(
+            required = false,
+            defaultValue = "#",
+            help = "The routing key used when binding the queue to the exchange. "
+                    + "Only used when exchangeName is set.")
+    private String routingKey = "#";
+
     public static RabbitMQSourceConfig load(String yamlFile) throws IOException {
         ObjectMapper mapper = new ObjectMapper(new YAMLFactory());
         return mapper.readValue(new File(yamlFile), RabbitMQSourceConfig.class);
@@ -76,6 +109,10 @@ public class RabbitMQSourceConfig extends RabbitMQAbstractConfig implements Seri
     public void validate() {
         super.validate();
         Preconditions.checkNotNull(queueName, "queueName property not set.");
+        Preconditions.checkArgument(!passive || !queueName.isEmpty(),
+                "queueName must be non-empty when passive is true.");
+        Preconditions.checkArgument(exchangeName == null || exchangeName.isEmpty() || routingKey != null,
+                "routingKey must not be null when exchangeName is set.");
         Preconditions.checkArgument(prefetchCount >= 0, "prefetchCount must be non-negative.");
     }
 }

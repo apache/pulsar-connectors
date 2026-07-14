@@ -21,6 +21,8 @@ package org.apache.pulsar.io.rabbitmq.source;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertNotNull;
+import static org.testng.Assert.assertNull;
+import com.rabbitmq.client.ConnectionFactory;
 import java.io.File;
 import java.io.IOException;
 import java.util.HashMap;
@@ -55,6 +57,12 @@ public class RabbitMQSourceConfigTest {
         assertEquals(Integer.parseInt("0"), config.getPrefetchCount());
         assertFalse(config.isPrefetchGlobal());
         assertFalse(config.isPassive());
+        assertFalse(config.isDurable());
+        assertFalse(config.isExclusive());
+        assertFalse(config.isAutoDelete());
+        assertNull(config.getExchangeName());
+        assertEquals("#", config.getRoutingKey());
+        assertFalse(config.isSsl());
     }
 
     @Test
@@ -75,6 +83,12 @@ public class RabbitMQSourceConfigTest {
         map.put("prefetchCount", "0");
         map.put("prefetchGlobal", "false");
         map.put("passive", "true");
+        map.put("durable", "true");
+        map.put("exclusive", "true");
+        map.put("autoDelete", "true");
+        map.put("exchangeName", "test-exchange");
+        map.put("routingKey", "test.#");
+        map.put("ssl", "true");
 
         SourceContext sourceContext = Mockito.mock(SourceContext.class);
         RabbitMQSourceConfig config = RabbitMQSourceConfig.load(map, sourceContext);
@@ -95,6 +109,12 @@ public class RabbitMQSourceConfigTest {
         assertEquals(false, config.isPrefetchGlobal());
         assertEquals(false, config.isPrefetchGlobal());
         assertEquals(true, config.isPassive());
+        assertEquals(true, config.isDurable());
+        assertEquals(true, config.isExclusive());
+        assertEquals(true, config.isAutoDelete());
+        assertEquals("test-exchange", config.getExchangeName());
+        assertEquals("test.#", config.getRoutingKey());
+        assertEquals(true, config.isSsl());
     }
 
     @Test
@@ -141,26 +161,62 @@ public class RabbitMQSourceConfigTest {
 
     @Test
     public final void validValidateTest() throws IOException {
+        RabbitMQSourceConfig config = validConfig();
+        config.validate();
+    }
+
+    @Test
+    public final void emptyQueueNameForNonPassiveDeclarationValidateTest() throws IOException {
+        RabbitMQSourceConfig config = validConfig()
+                .setQueueName("")
+                .setPassive(false);
+        config.validate();
+    }
+
+    @Test
+    public final void emptyRoutingKeyWithExchangeValidateTest() throws IOException {
+        RabbitMQSourceConfig config = validConfig()
+                .setExchangeName("test-exchange")
+                .setRoutingKey("");
+        config.validate();
+    }
+
+    @Test(expectedExceptions = IllegalArgumentException.class,
+        expectedExceptionsMessageRegExp = "queueName must be non-empty when passive is true\\.")
+    public final void emptyQueueNameForPassiveDeclarationValidateTest() throws IOException {
+        RabbitMQSourceConfig config = validConfig()
+                .setQueueName("")
+                .setPassive(true);
+        config.validate();
+    }
+
+    @Test(expectedExceptions = IllegalArgumentException.class,
+        expectedExceptionsMessageRegExp = "routingKey must not be null when exchangeName is set\\.")
+    public final void nullRoutingKeyWithExchangeValidateTest() throws IOException {
+        RabbitMQSourceConfig config = validConfig()
+                .setExchangeName("test-exchange")
+                .setRoutingKey(null);
+        config.validate();
+    }
+
+    @Test
+    public final void createConnectionFactoryWithSslTest() throws Exception {
         Map<String, Object> map = new HashMap<>();
         map.put("host", "localhost");
-        map.put("port", "5672");
+        map.put("port", "5671");
         map.put("virtualHost", "/");
         map.put("username", "guest");
         map.put("password", "guest");
         map.put("queueName", "test-queue");
         map.put("connectionName", "test-connection");
-        map.put("requestedChannelMax", "0");
-        map.put("requestedFrameMax", "0");
-        map.put("connectionTimeout", "60000");
-        map.put("handshakeTimeout", "10000");
-        map.put("requestedHeartbeat", "60");
-        map.put("prefetchCount", "0");
-        map.put("prefetchGlobal", "false");
-        map.put("passive", "false");
+        map.put("ssl", "true");
 
         SourceContext sourceContext = Mockito.mock(SourceContext.class);
         RabbitMQSourceConfig config = RabbitMQSourceConfig.load(map, sourceContext);
-        config.validate();
+
+        // building the factory with ssl enabled must set up the TLS context without throwing
+        ConnectionFactory connectionFactory = config.createConnectionFactory();
+        assertNotNull(connectionFactory);
     }
 
     @Test(expectedExceptions = IllegalArgumentException.class,
@@ -210,6 +266,26 @@ public class RabbitMQSourceConfigTest {
         SourceContext sourceContext = Mockito.mock(SourceContext.class);
         RabbitMQSourceConfig config = RabbitMQSourceConfig.load(map, sourceContext);
         config.validate();
+    }
+
+    private RabbitMQSourceConfig validConfig() throws IOException {
+        Map<String, Object> map = new HashMap<>();
+        map.put("host", "localhost");
+        map.put("port", "5672");
+        map.put("virtualHost", "/");
+        map.put("username", "guest");
+        map.put("password", "guest");
+        map.put("queueName", "test-queue");
+        map.put("connectionName", "test-connection");
+        map.put("requestedChannelMax", "0");
+        map.put("requestedFrameMax", "0");
+        map.put("connectionTimeout", "60000");
+        map.put("handshakeTimeout", "10000");
+        map.put("requestedHeartbeat", "60");
+        map.put("prefetchCount", "0");
+        map.put("prefetchGlobal", "false");
+        map.put("passive", "false");
+        return RabbitMQSourceConfig.load(map, Mockito.mock(SourceContext.class));
     }
 
     private File getFile(String name) {

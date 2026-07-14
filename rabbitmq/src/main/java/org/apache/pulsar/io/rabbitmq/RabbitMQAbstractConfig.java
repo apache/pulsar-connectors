@@ -21,6 +21,9 @@ package org.apache.pulsar.io.rabbitmq;
 import com.google.common.base.Preconditions;
 import com.rabbitmq.client.ConnectionFactory;
 import java.io.Serializable;
+import java.security.KeyManagementException;
+import java.security.NoSuchAlgorithmException;
+import javax.net.ssl.SSLContext;
 import lombok.Data;
 import lombok.experimental.Accessors;
 import org.apache.pulsar.io.core.annotations.FieldDoc;
@@ -51,6 +54,15 @@ public class RabbitMQAbstractConfig implements Serializable {
         defaultValue = "5672",
         help = "The RabbitMQ port to connect to")
     private int port = 5672;
+
+    @FieldDoc(
+        required = false,
+        defaultValue = "false",
+        help = "Set to true to establish a TLS/SSL connection to RabbitMQ. The server certificate is "
+                + "validated against the JVM trust store and the server hostname is verified. To trust a "
+                + "private CA or self-signed certificate, add it to the JVM trust store "
+                + "(e.g. via -Djavax.net.ssl.trustStore).")
+    private boolean ssl = false;
 
     @FieldDoc(
         required = true,
@@ -115,7 +127,7 @@ public class RabbitMQAbstractConfig implements Serializable {
         Preconditions.checkNotNull(connectionName, "connectionName property not set.");
     }
 
-    public ConnectionFactory createConnectionFactory() {
+    public ConnectionFactory createConnectionFactory() throws NoSuchAlgorithmException, KeyManagementException {
         ConnectionFactory connectionFactory = new ConnectionFactory();
         connectionFactory.setHost(this.host);
         connectionFactory.setUsername(this.username);
@@ -127,6 +139,13 @@ public class RabbitMQAbstractConfig implements Serializable {
         connectionFactory.setHandshakeTimeout(this.handshakeTimeout);
         connectionFactory.setRequestedHeartbeat(this.requestedHeartbeat);
         connectionFactory.setPort(this.port);
+        if (this.ssl) {
+            // Use the JVM's default SSL context: it trusts the default trust store and negotiates the
+            // highest mutually supported TLS version. Together with hostname verification this avoids the
+            // insecure trust-all behaviour of the no-arg ConnectionFactory.useSslProtocol().
+            connectionFactory.useSslProtocol(SSLContext.getDefault());
+            connectionFactory.enableHostnameVerification();
+        }
         return connectionFactory;
     }
 }
