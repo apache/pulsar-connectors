@@ -226,8 +226,10 @@ public class FileSourceIntegrationTest {
                         collected.add(record);
                     }
                 }
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
             } catch (Exception e) {
-                // read() throws InterruptedException on teardown; terminate quietly.
+                throw new RuntimeException("Unexpected exception from FileSource.read()", e);
             }
         }, "file-source-it-reader");
         readerThread.setDaemon(true);
