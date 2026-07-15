@@ -20,6 +20,7 @@ package org.apache.pulsar.io.file.utils;
 
 import java.io.BufferedInputStream;
 import java.io.BufferedReader;
+import java.io.Closeable;
 import java.io.DataInputStream;
 import java.io.File;
 import java.io.FileInputStream;
@@ -28,9 +29,12 @@ import java.io.InputStreamReader;
 import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.List;
+import java.util.Iterator;
+import java.util.NoSuchElementException;
+import java.util.Spliterator;
+import java.util.Spliterators;
 import java.util.stream.Stream;
+import java.util.stream.StreamSupport;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
@@ -53,38 +57,102 @@ public class ZipFiles {
     }
 
     /**
-     * Get a stream of lines from every file entry of a zip file, similar to
+     * Get a lazily loaded stream of lines from every file entry of a zip file, similar to
      * {@link Files#lines(java.nio.file.Path)}.
+     *
+     * <p>A {@link ZipInputStream} yields no data until it is positioned onto an entry via
+     * {@link ZipInputStream#getNextEntry()}; without that call the reader sees an empty stream
+     * and no lines are produced. The returned stream lazily walks every file entry and emits
+     * their lines in entry order, so multi-entry archives contribute all of their lines without
+     * buffering the whole archive in memory. The caller must close the returned stream to
+     * release the underlying file.
      *
      * @param path
      *          The path to the zipped file.
      * @return stream with the lines of all file entries, in entry order.
      */
     public static Stream<String> lines(Path path) {
-        // A ZipInputStream returns no data until it is positioned onto an entry via
-        // getNextEntry(); without that call the reader sees an empty stream and no lines are
-        // produced. Read through every file entry so multi-entry archives contribute all of
-        // their lines, then return the collected lines as a stream (the archive must be fully
-        // read to walk its entries, so this cannot be lazy the way GZipFiles.lines is).
-        List<String> lines = new ArrayList<>();
-        try (ZipInputStream zipStream = new ZipInputStream(Files.newInputStream(path))) {
-            ZipEntry entry;
-            while ((entry = zipStream.getNextEntry()) != null) {
-                if (entry.isDirectory()) {
-                    continue;
-                }
-                // Read the current entry to its end. read() returns -1 at the entry boundary,
-                // so the reader stops before the next entry; do not close it, as that would
-                // close the shared zipStream mid-iteration.
-                BufferedReader reader = new BufferedReader(new InputStreamReader(zipStream));
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    lines.add(line);
-                }
-            }
+        ZipInputStream zipStream;
+        try {
+            zipStream = new ZipInputStream(Files.newInputStream(path));
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
-        return lines.stream();
+        Spliterator<String> spliterator = Spliterators.spliteratorUnknownSize(
+                new ZipLineIterator(zipStream), Spliterator.ORDERED | Spliterator.NONNULL);
+        return StreamSupport.stream(spliterator, false).onClose(() -> closeSafely(zipStream));
+    }
+
+    /**
+     * Iterates the lines of every non-directory entry of a zip stream in entry order, advancing
+     * to the next entry when the current one is exhausted. Entry boundaries are line boundaries:
+     * a fresh {@link BufferedReader} is used for each entry, so an entry whose content does not
+     * end with a newline does not merge its trailing text into the next entry's first line.
+     */
+    private static final class ZipLineIterator implements Iterator<String> {
+        private final ZipInputStream zipStream;
+        private BufferedReader reader;
+        private String nextLine;
+
+        ZipLineIterator(ZipInputStream zipStream) {
+            this.zipStream = zipStream;
+        }
+
+        @Override
+        public boolean hasNext() {
+            if (nextLine == null) {
+                nextLine = readNextLine();
+            }
+            return nextLine != null;
+        }
+
+        @Override
+        public String next() {
+            if (!hasNext()) {
+                throw new NoSuchElementException();
+            }
+            String line = nextLine;
+            nextLine = null;
+            return line;
+        }
+
+        private String readNextLine() {
+            try {
+                while (true) {
+                    if (reader != null) {
+                        String line = reader.readLine();
+                        if (line != null) {
+                            return line;
+                        }
+                        // Current entry is exhausted; drop its reader but keep the shared
+                        // zipStream open so we can position onto the next entry.
+                        reader = null;
+                    }
+                    ZipEntry entry = zipStream.getNextEntry();
+                    if (entry == null) {
+                        return null;
+                    }
+                    if (!entry.isDirectory()) {
+                        // Wrap the shared zipStream in a fresh reader for this entry. read()
+                        // returns -1 at the entry boundary, so the reader stops before the next
+                        // entry; the reader is intentionally not closed, as that would close the
+                        // shared zipStream mid-iteration.
+                        reader = new BufferedReader(new InputStreamReader(zipStream));
+                    }
+                }
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            }
+        }
+    }
+
+    private static void closeSafely(Closeable closeable) {
+        if (closeable != null) {
+            try {
+                closeable.close();
+            } catch (IOException e) {
+                // Ignore
+            }
+        }
     }
 }
