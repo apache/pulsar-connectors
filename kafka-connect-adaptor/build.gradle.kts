@@ -56,7 +56,7 @@ dependencies {
     testImplementation(variantOf(libs.pulsar.broker) { classifier("tests") })
     testImplementation(libs.pulsar.testmocks)
     // Provides TestRetrySupport, the base class of MockedPulsarServiceBaseTest /
-    // ProducerConsumerBase used by the broker-backed tests below.
+    // ProducerConsumerBase, which this module's broker-backed tests extend.
     testImplementation(libs.pulsar.buildtools)
     // pulsar-broker's tests jar references io.opentelemetry.sdk.testing.assertj.* in method
     // signatures; without this on the classpath, TestNG's getDeclaredMethods() call during test
