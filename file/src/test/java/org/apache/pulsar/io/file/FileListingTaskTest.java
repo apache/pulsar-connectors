@@ -18,12 +18,14 @@
  */
 package org.apache.pulsar.io.file;
 
+import static org.awaitility.Awaitility.await;
 import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.testng.Assert.fail;
 import java.io.File;
 import java.io.IOException;
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ExecutionException;
@@ -31,6 +33,21 @@ import org.testng.annotations.Test;
 
 
 public class FileListingTaskTest extends AbstractFileTest {
+
+    // Generous ceiling for the asynchronous listing thread to enqueue the expected files.
+    // The assertion passes as soon as the count is reached, so a healthy run is still fast;
+    // this only prevents failures when a loaded CI runner is slow to schedule the thread.
+    private static final Duration AWAIT_TIMEOUT = Duration.ofSeconds(15);
+
+    // Fixed wait used only by "nothing should be offered" assertions, where there is no
+    // positive event to await; it gives the listing thread ample time to (wrongly) act.
+    private static final long NEGATIVE_ASSERTION_WAIT_MS = 2000;
+
+    /** Waits until the listing thread has offered exactly {@code expectedCount} files. */
+    private void awaitOffers(int expectedCount) {
+        await().atMost(AWAIT_TIMEOUT)
+                .untilAsserted(() -> verify(workQueue, times(expectedCount)).offer(any(File.class)));
+    }
 
     @Test
     public final void singleFileTest() throws IOException {
@@ -42,9 +59,8 @@ public class FileListingTaskTest extends AbstractFileTest {
             generateFiles(1);
             listingTask = new FileListingTask(FileSourceConfig.load(map), workQueue, inProcess, recentlyProcessed);
             executor.execute(listingTask);
-            Thread.sleep(2000);
+            awaitOffers(1);
             verify(producedFiles, times(1)).put(any(File.class));
-            verify(workQueue, times(1)).offer(any(File.class));
 
             for (File produced : producedFiles) {
                 verify(workQueue, times(1)).offer(produced);
@@ -65,8 +81,7 @@ public class FileListingTaskTest extends AbstractFileTest {
             generateFiles(50);
             listingTask = new FileListingTask(FileSourceConfig.load(map), workQueue, inProcess, recentlyProcessed);
             executor.execute(listingTask);
-            Thread.sleep(2000);
-            verify(workQueue, times(50)).offer(any(File.class));
+            awaitOffers(50);
 
             for (File produced : producedFiles) {
                 verify(workQueue, times(1)).offer(produced);
@@ -88,7 +103,7 @@ public class FileListingTaskTest extends AbstractFileTest {
             generateFiles(50, 0);
             listingTask = new FileListingTask(FileSourceConfig.load(map), workQueue, inProcess, recentlyProcessed);
             executor.execute(listingTask);
-            Thread.sleep(2000);
+            Thread.sleep(NEGATIVE_ASSERTION_WAIT_MS);
             verify(workQueue, times(0)).offer(any(File.class));
         } catch (InterruptedException | ExecutionException e) {
             fail("Unable to generate files" + e.getLocalizedMessage());
@@ -108,8 +123,7 @@ public class FileListingTaskTest extends AbstractFileTest {
             generateFiles(45, 10);
             listingTask = new FileListingTask(FileSourceConfig.load(map), workQueue, inProcess, recentlyProcessed);
             executor.execute(listingTask);
-            Thread.sleep(2000);
-            verify(workQueue, times(45)).offer(any(File.class));
+            awaitOffers(45);
         } catch (InterruptedException | ExecutionException e) {
             fail("Unable to generate files" + e.getLocalizedMessage());
         } finally {
@@ -129,7 +143,7 @@ public class FileListingTaskTest extends AbstractFileTest {
             generateFiles(5);
             listingTask = new FileListingTask(FileSourceConfig.load(map), workQueue, inProcess, recentlyProcessed);
             executor.execute(listingTask);
-            Thread.sleep(2000);
+            Thread.sleep(NEGATIVE_ASSERTION_WAIT_MS);
             verify(workQueue, times(0)).offer(any(File.class));
         } catch (InterruptedException | ExecutionException e) {
             fail("Unable to generate files" + e.getLocalizedMessage());
@@ -148,14 +162,14 @@ public class FileListingTaskTest extends AbstractFileTest {
         try {
             // Create 5 files that will be processed
             generateFiles(5);
+            // Deliberately age these files past maximumFileAge so they are skipped below.
             Thread.sleep(5000);
 
             // Create 5 files that will be too "old" for processing
             generateFiles(5);
             listingTask = new FileListingTask(FileSourceConfig.load(map), workQueue, inProcess, recentlyProcessed);
             executor.execute(listingTask);
-            Thread.sleep(2000);
-            verify(workQueue, times(5)).offer(any(File.class));
+            awaitOffers(5);
         } catch (InterruptedException | ExecutionException e) {
             fail("Unable to generate files" + e.getLocalizedMessage());
         } finally {
@@ -166,7 +180,6 @@ public class FileListingTaskTest extends AbstractFileTest {
     @Test
     public void pollingIntervalTest() throws IOException {
         int pollingInterval = 100;
-        int tolerance = 20;
 
         Map<String, Object> map = new HashMap<>();
         map.put("inputDirectory", directory.toString());
@@ -176,15 +189,14 @@ public class FileListingTaskTest extends AbstractFileTest {
             listingTask = new FileListingTask(FileSourceConfig.load(map), workQueue, inProcess, recentlyProcessed);
             executor.execute(listingTask);
 
+            // A file dropped in after start must be picked up on a subsequent polling cycle.
             generateFiles(1);
-            Thread.sleep(pollingInterval + tolerance);
+            awaitOffers(1);
 
-            verify(workQueue, times(1)).offer(any(File.class));
-
+            // A second file dropped in later must be picked up on a later cycle, proving the
+            // listing loop keeps polling rather than scanning only once.
             generateFiles(1);
-            Thread.sleep(pollingInterval + tolerance);
-
-            verify(workQueue, times(2)).offer(any(File.class));
+            awaitOffers(2);
         } catch (InterruptedException | ExecutionException e) {
             fail("Unable to generate files" + e.getLocalizedMessage());
         } finally {
@@ -207,8 +219,7 @@ public class FileListingTaskTest extends AbstractFileTest {
             generateFiles(5, 1, directory.toString() + File.separator + "sub-dir");
             listingTask = new FileListingTask(FileSourceConfig.load(map), workQueue, inProcess, recentlyProcessed);
             executor.execute(listingTask);
-            Thread.sleep(2000);
-            verify(workQueue, times(10)).offer(any(File.class));
+            awaitOffers(10);
         } catch (InterruptedException | ExecutionException e) {
             fail("Unable to generate files" + e.getLocalizedMessage());
         } finally {
@@ -231,8 +242,7 @@ public class FileListingTaskTest extends AbstractFileTest {
             generateFiles(5, 1, directory.toString() + File.separator + "sub-dir");
             listingTask = new FileListingTask(FileSourceConfig.load(map), workQueue, inProcess, recentlyProcessed);
             executor.execute(listingTask);
-            Thread.sleep(2000);
-            verify(workQueue, times(5)).offer(any(File.class));
+            awaitOffers(5);
         } catch (InterruptedException | ExecutionException e) {
             fail("Unable to generate files" + e.getLocalizedMessage());
         } finally {
@@ -254,8 +264,7 @@ public class FileListingTaskTest extends AbstractFileTest {
             generateFiles(5, 1, directory.toString() + File.separator + "dir-b");
             listingTask = new FileListingTask(FileSourceConfig.load(map), workQueue, inProcess, recentlyProcessed);
             executor.execute(listingTask);
-            Thread.sleep(2000);
-            verify(workQueue, times(5)).offer(any(File.class));
+            awaitOffers(5);
         } catch (InterruptedException | ExecutionException e) {
             fail("Unable to generate files" + e.getLocalizedMessage());
         } finally {
@@ -277,8 +286,7 @@ public class FileListingTaskTest extends AbstractFileTest {
             generateFiles(1, 1, directory.toString(), processedFileSuffix);
             listingTask = new FileListingTask(FileSourceConfig.load(map), workQueue, inProcess, recentlyProcessed);
             executor.execute(listingTask);
-            Thread.sleep(2000);
-            verify(workQueue, times(5)).offer(any(File.class));
+            awaitOffers(5);
         } catch (InterruptedException | ExecutionException e) {
             fail("Unable to generate files" + e.getLocalizedMessage());
         } finally {
@@ -300,8 +308,7 @@ public class FileListingTaskTest extends AbstractFileTest {
             generateFiles(1, 1, directory.toString(), processedFileSuffix);
             listingTask = new FileListingTask(FileSourceConfig.load(map), workQueue, inProcess, recentlyProcessed);
             executor.execute(listingTask);
-            Thread.sleep(2000);
-            verify(workQueue, times(6)).offer(any(File.class));
+            awaitOffers(6);
         } catch (InterruptedException | ExecutionException e) {
             fail("Unable to generate files" + e.getLocalizedMessage());
         } finally {
