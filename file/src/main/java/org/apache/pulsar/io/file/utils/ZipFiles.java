@@ -20,7 +20,6 @@ package org.apache.pulsar.io.file.utils;
 
 import java.io.BufferedInputStream;
 import java.io.BufferedReader;
-import java.io.Closeable;
 import java.io.DataInputStream;
 import java.io.File;
 import java.io.FileInputStream;
@@ -29,7 +28,10 @@ import java.io.InputStreamReader;
 import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.stream.Stream;
+import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
 /**
@@ -51,34 +53,38 @@ public class ZipFiles {
     }
 
     /**
-     * Get a lazily loaded stream of lines from a gzipped file, similar to
+     * Get a stream of lines from every file entry of a zip file, similar to
      * {@link Files#lines(java.nio.file.Path)}.
      *
      * @param path
      *          The path to the zipped file.
-     * @return stream with lines.
+     * @return stream with the lines of all file entries, in entry order.
      */
     public static Stream<String> lines(Path path) {
-        ZipInputStream zipStream = null;
-
-        try {
-          zipStream = new ZipInputStream(Files.newInputStream(path));
+        // A ZipInputStream returns no data until it is positioned onto an entry via
+        // getNextEntry(); without that call the reader sees an empty stream and no lines are
+        // produced. Read through every file entry so multi-entry archives contribute all of
+        // their lines, then return the collected lines as a stream (the archive must be fully
+        // read to walk its entries, so this cannot be lazy the way GZipFiles.lines is).
+        List<String> lines = new ArrayList<>();
+        try (ZipInputStream zipStream = new ZipInputStream(Files.newInputStream(path))) {
+            ZipEntry entry;
+            while ((entry = zipStream.getNextEntry()) != null) {
+                if (entry.isDirectory()) {
+                    continue;
+                }
+                // Read the current entry to its end. read() returns -1 at the entry boundary,
+                // so the reader stops before the next entry; do not close it, as that would
+                // close the shared zipStream mid-iteration.
+                BufferedReader reader = new BufferedReader(new InputStreamReader(zipStream));
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    lines.add(line);
+                }
+            }
         } catch (IOException e) {
-          closeSafely(zipStream);
-          throw new UncheckedIOException(e);
+            throw new UncheckedIOException(e);
         }
-        // Reader decoder = new InputStreamReader(gzipStream, Charset.defaultCharset());
-        BufferedReader reader = new BufferedReader(new InputStreamReader(zipStream));
-        return reader.lines().onClose(() -> closeSafely(reader));
-    }
-
-    private static void closeSafely(Closeable closeable) {
-        if (closeable != null) {
-          try {
-            closeable.close();
-          } catch (IOException e) {
-            // Ignore
-          }
-        }
+        return lines.stream();
     }
 }

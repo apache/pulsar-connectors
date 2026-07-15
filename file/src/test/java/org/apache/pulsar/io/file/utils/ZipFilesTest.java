@@ -18,12 +18,19 @@
  */
 package org.apache.pulsar.io.file.utils;
 
+import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertTrue;
 import java.io.File;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.List;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 import org.testng.annotations.Test;
 
 public class ZipFilesTest {
@@ -52,10 +59,38 @@ public class ZipFilesTest {
     public final void streamZipFileTest() {
         Path path = Paths.get(getFile("org/apache/pulsar/io/file/validZip.zip").getAbsolutePath(), "");
 
+        // validZip.zip contains a single entry with the nine lines "Line 1".."Line 9".
         try (Stream<String> lines = ZipFiles.lines(path)) {
-            lines.forEachOrdered(line -> assertTrue(line.startsWith("Line ")));
-        } catch (Exception e) {
-            e.printStackTrace();
+            List<String> collected = lines.collect(Collectors.toList());
+            assertEquals(collected.size(), 9, "expected nine lines from the zip entry");
+            for (int i = 0; i < collected.size(); i++) {
+                assertEquals(collected.get(i), "Line " + (i + 1));
+            }
+        }
+    }
+
+    @Test
+    public final void streamMultiEntryZipFileTest() throws Exception {
+        // Build a two-entry archive in a temp file so the test is self-contained and proves
+        // that lines from every entry are returned, in entry order.
+        Path zip = Files.createTempFile("pulsar-io-file-ziptest", ".zip");
+        try {
+            try (ZipOutputStream out = new ZipOutputStream(Files.newOutputStream(zip))) {
+                out.putNextEntry(new ZipEntry("first.txt"));
+                out.write("a1\na2".getBytes(StandardCharsets.UTF_8));
+                out.closeEntry();
+                out.putNextEntry(new ZipEntry("second.txt"));
+                out.write("b1\nb2\nb3".getBytes(StandardCharsets.UTF_8));
+                out.closeEntry();
+            }
+
+            assertTrue(ZipFiles.isZip(zip.toFile()));
+            try (Stream<String> lines = ZipFiles.lines(zip)) {
+                assertEquals(lines.collect(Collectors.toList()),
+                        List.of("a1", "a2", "b1", "b2", "b3"));
+            }
+        } finally {
+            Files.deleteIfExists(zip);
         }
     }
 
