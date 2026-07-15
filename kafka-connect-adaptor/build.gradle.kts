@@ -55,24 +55,17 @@ dependencies {
     testImplementation(libs.pulsar.broker)
     testImplementation(variantOf(libs.pulsar.broker) { classifier("tests") })
     testImplementation(libs.pulsar.testmocks)
+    // Provides TestRetrySupport, the base class of MockedPulsarServiceBaseTest /
+    // ProducerConsumerBase, which this module's broker-backed tests extend.
+    testImplementation(libs.pulsar.buildtools)
+    // pulsar-broker's tests jar references io.opentelemetry.sdk.testing.assertj.* in method
+    // signatures; without this on the classpath, TestNG's getDeclaredMethods() call during test
+    // discovery throws NoClassDefFoundError and silently collects zero tests from every
+    // MockedPulsarServiceBaseTest subclass.
+    testRuntimeOnly(libs.opentelemetry.sdk.testing)
     testImplementation(libs.awaitility)
     testImplementation(libs.kafka.connect.file)
     testImplementation(libs.asynchttpclient)
     testImplementation(libs.bc.fips)
     testImplementation(libs.netty.reactive.streams)
-}
-
-// Some KCA tests depend on pulsar-broker internals that have changed since the
-// last released version. Those tests will compile once matching pulsar artifacts
-// are published; exclude only them for now so that self-contained unit tests
-// still compile and run in CI.
-val brokerDependentTestSources = listOf(
-    "**/KafkaConnectSinkTest.java",
-    "**/KafkaConnectSourceErrRecTest.java",
-    "**/KafkaConnectSourceErrTest.java",
-    "**/KafkaConnectSourceTest.java",
-    "**/PulsarOffsetBackingStoreTest.java",
-)
-tasks.named<JavaCompile>("compileTestJava") {
-    exclude(brokerDependentTestSources)
 }
