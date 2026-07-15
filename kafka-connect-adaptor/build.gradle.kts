@@ -62,7 +62,7 @@ dependencies {
     // signatures; without this on the classpath, TestNG's getDeclaredMethods() call during test
     // discovery throws NoClassDefFoundError and silently collects zero tests from every
     // MockedPulsarServiceBaseTest subclass.
-    testImplementation("io.opentelemetry:opentelemetry-sdk-testing:1.56.0")
+    testRuntimeOnly(libs.opentelemetry.sdk.testing)
     testImplementation(libs.awaitility)
     testImplementation(libs.kafka.connect.file)
     testImplementation(libs.asynchttpclient)
