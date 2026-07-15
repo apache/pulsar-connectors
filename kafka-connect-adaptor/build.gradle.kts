@@ -58,6 +58,11 @@ dependencies {
     // Provides TestRetrySupport, the base class of MockedPulsarServiceBaseTest /
     // ProducerConsumerBase used by the broker-backed tests below.
     testImplementation(libs.pulsar.buildtools)
+    // pulsar-broker's tests jar references io.opentelemetry.sdk.testing.assertj.* in method
+    // signatures; without this on the classpath, TestNG's getDeclaredMethods() call during test
+    // discovery throws NoClassDefFoundError and silently collects zero tests from every
+    // MockedPulsarServiceBaseTest subclass.
+    testImplementation("io.opentelemetry:opentelemetry-sdk-testing:1.56.0")
     testImplementation(libs.awaitility)
     testImplementation(libs.kafka.connect.file)
     testImplementation(libs.asynchttpclient)
