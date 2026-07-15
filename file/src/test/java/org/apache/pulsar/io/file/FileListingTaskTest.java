@@ -160,12 +160,13 @@ public class FileListingTaskTest extends AbstractFileTest {
         map.put("maximumFileAge", "5000");
 
         try {
-            // Create 5 files that will be processed
+            // Create 5 files, then age them past maximumFileAge with the sleep below so they
+            // are too "old" and get skipped.
             generateFiles(5);
-            // Deliberately age these files past maximumFileAge so they are skipped below.
             Thread.sleep(5000);
 
-            // Create 5 files that will be too "old" for processing
+            // Create 5 fresh files that are young enough to be processed; only these 5 are
+            // expected to be offered.
             generateFiles(5);
             listingTask = new FileListingTask(FileSourceConfig.load(map), workQueue, inProcess, recentlyProcessed);
             executor.execute(listingTask);
