@@ -53,7 +53,11 @@ public class NettySource extends PushSource<byte[]> {
 
     @Override
     public void close() throws Exception {
-        nettyServer.shutdownGracefully();
+        // nettyServer is assigned asynchronously by the server thread, so it may still be null
+        // if close() runs before the server has started (e.g. open() failed or was closed early).
+        if (nettyServer != null) {
+            nettyServer.shutdownGracefully();
+        }
     }
 
     private class PulsarServerRunnable implements Runnable {
