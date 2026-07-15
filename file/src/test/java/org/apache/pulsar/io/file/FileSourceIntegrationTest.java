@@ -24,7 +24,7 @@ import static org.testng.Assert.assertTrue;
 import java.io.File;
 import java.io.IOException;
 import java.io.OutputStream;
-import java.nio.charset.StandardCharsets;
+import java.nio.charset.Charset;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -74,14 +74,25 @@ public class FileSourceIntegrationTest {
 
     @AfterMethod(alwaysRun = true)
     public void tearDown() throws Exception {
+        // Interrupt the reader first, then close the source so its worker pool stops and any
+        // blocking read() is unblocked, then join the reader before asserting it terminated.
+        // Cleanup runs in a finally so a failing close() never leaks the temp directory.
+        try {
+            if (readerThread != null) {
+                readerThread.interrupt();
+            }
+            if (source != null) {
+                source.close();
+            }
+            if (readerThread != null) {
+                readerThread.join(2000);
+            }
+        } finally {
+            deleteRecursively(directory);
+        }
         if (readerThread != null) {
-            readerThread.interrupt();
-            readerThread.join(2000);
+            assertFalse(readerThread.isAlive(), "reader thread should have stopped after teardown");
         }
-        if (source != null) {
-            source.close();
-        }
-        deleteRecursively(directory);
     }
 
     // ------------------------------------------------------------------ tests
@@ -118,7 +129,7 @@ public class FileSourceIntegrationTest {
     public void testRecursiveDirectoriesAreTraversed() throws Exception {
         writeText("top.txt", "top");
         Path nested = Files.createDirectories(directory.resolve("sub/deeper"));
-        Files.write(nested.resolve("bottom.txt"), "bottom".getBytes(StandardCharsets.UTF_8));
+        Files.write(nested.resolve("bottom.txt"), "bottom".getBytes(Charset.defaultCharset()));
 
         Map<String, Object> config = baseConfig();
         config.put("recurse", true);
@@ -152,7 +163,11 @@ public class FileSourceIntegrationTest {
         writeText("visible.txt", "seen");
         writeText(".hidden.txt", "unseen");
 
-        startSource(baseConfig());
+        Map<String, Object> config = baseConfig();
+        // Use a filter that DOES match dotfiles so the hidden file is excluded solely by
+        // ignoreHiddenFiles (which defaults to true), not by the default fileFilter ([^.].*).
+        config.put("fileFilter", ".*");
+        startSource(config);
 
         assertTrue(awaitAtLeast(1, DELIVERY_TIMEOUT_MS));
         assertFalse(awaitAtLeast(2, 3 * POLLING_INTERVAL_MS),
@@ -259,25 +274,25 @@ public class FileSourceIntegrationTest {
         return !file.exists();
     }
 
-    /** Collapses collected records into key -> value(UTF-8); duplicate keys keep the last value. */
+    /** Collapses collected records into key -> value(default charset); duplicate keys keep the last value. */
     private Map<String, String> indexByKey() {
         Map<String, String> byKey = new LinkedHashMap<>();
         for (Record<byte[]> record : collected) {
-            byKey.put(record.getKey().orElse(null), new String(record.getValue(), StandardCharsets.UTF_8));
+            byKey.put(record.getKey().orElse(null), new String(record.getValue(), Charset.defaultCharset()));
         }
         return byKey;
     }
 
     private File writeText(String name, String... lines) throws IOException {
         Path path = directory.resolve(name);
-        Files.write(path, String.join("\n", lines).getBytes(StandardCharsets.UTF_8));
+        Files.write(path, String.join("\n", lines).getBytes(Charset.defaultCharset()));
         return path.toFile();
     }
 
     private File writeGzip(String name, String... lines) throws IOException {
         Path path = directory.resolve(name);
         try (OutputStream out = new GZIPOutputStream(Files.newOutputStream(path))) {
-            out.write(String.join("\n", lines).getBytes(StandardCharsets.UTF_8));
+            out.write(String.join("\n", lines).getBytes(Charset.defaultCharset()));
         }
         return path.toFile();
     }
