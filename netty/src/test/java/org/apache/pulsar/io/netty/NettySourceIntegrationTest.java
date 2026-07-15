@@ -176,8 +176,13 @@ public class NettySourceIntegrationTest {
     }
 
     private static int freePort() throws IOException {
-        try (ServerSocket socket = new ServerSocket(0)) {
-            return socket.getLocalPort();
+        while (true) {
+            try (ServerSocket socket = new ServerSocket(0)) {
+                int port = socket.getLocalPort();
+                if (port >= 1024) {
+                    return port;
+                }
+            }
         }
     }
 
