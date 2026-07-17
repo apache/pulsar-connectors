@@ -115,11 +115,11 @@ public class MongoSourceContainerTest {
             insertDoc("seed-" + i);
         }
 
-        // Keep writing after open as well so the change stream has a steady supply regardless of
+        // Keep writing after open so the change stream has a steady supply regardless of
         // exactly when the subscription becomes active.
-        startBackgroundWriter();
-
         source.open(buildConfig(), mock(SourceContext.class));
+
+        startBackgroundWriter();
 
         int received = 0;
         for (int i = 0; i < EXPECTED_RECORDS; i++) {
@@ -133,11 +133,13 @@ public class MongoSourceContainerTest {
             assertNotNull(value.get("ns"), "record missing ns");
             Document fullDocument = value.get("fullDocument", Document.class);
             assertNotNull(fullDocument, "record missing fullDocument");
-            assertTrue(fullDocument.getString("name").startsWith("seed-")
-                            || fullDocument.getString("name").startsWith("live-"),
-                    "unexpected fullDocument name: " + fullDocument.getString("name"));
+
+            String name = fullDocument.getString("name");
+            assertNotNull(name, "fullDocument missing name");
+            assertTrue(name.startsWith("seed-"), "unexpected fullDocument name: " + name);
+
             log.info("Received change-stream record: key={} name={}",
-                    record.getKey().orElse(null), fullDocument.getString("name"));
+                    record.getKey().orElse(null), name);
             received++;
         }
         assertTrue(received >= EXPECTED_RECORDS,
