@@ -25,14 +25,14 @@ import static org.testng.Assert.assertTrue;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.pulsar.functions.api.Record;
 import org.apache.pulsar.io.core.SourceContext;
@@ -46,6 +46,10 @@ import org.testng.annotations.Test;
  * Integration test for {@link MongoSource} that exercises the full path from a real MongoDB change
  * stream into the source's record queue. A {@link MongoDBContainer} provides a single-node replica
  * set (which change streams require) and the source is driven end-to-end against it.
+ *
+ * <p>The test seeds documents <em>before</em> opening the source and configures {@code
+ * syncType=FULL_SYNC}, then asserts that exactly those seeded documents are replayed through the
+ * change stream — so a pass proves the FULL_SYNC replay path, not merely that some record arrived.
  */
 @Slf4j
 public class MongoSourceContainerTest {
@@ -62,8 +66,6 @@ public class MongoSourceContainerTest {
     private com.mongodb.client.MongoClient verifyClient;
     private MongoSource source;
     private ExecutorService readerExecutor;
-    private Thread writerThread;
-    private final AtomicBoolean keepWriting = new AtomicBoolean(false);
 
     @BeforeMethod
     public void setUp() {
@@ -71,7 +73,7 @@ public class MongoSourceContainerTest {
                 .withStartupTimeout(Duration.ofMinutes(3));
         mongoContainer.start();
 
-        // Sync driver used only to write test documents and drive the change stream.
+        // Sync driver used only to write the test documents.
         verifyClient = com.mongodb.client.MongoClients.create(mongoContainer.getConnectionString());
 
         readerExecutor = Executors.newSingleThreadExecutor(r -> {
@@ -85,10 +87,6 @@ public class MongoSourceContainerTest {
 
     @AfterMethod(alwaysRun = true)
     public void tearDown() throws Exception {
-        keepWriting.set(false);
-        if (writerThread != null) {
-            writerThread.interrupt();
-        }
         if (readerExecutor != null) {
             // A reader may still be blocked in read(), which never returns null.
             readerExecutor.shutdownNow();
@@ -110,18 +108,18 @@ public class MongoSourceContainerTest {
 
     @Test(timeOut = 300_000)
     public void testReadFromChangeStream() throws Exception {
-        // Seed some documents before the source starts; FULL_SYNC replays them from the start.
+        // Seed the documents before the source starts. FULL_SYNC (startAtOperationTime=0) replays
+        // them from the start of the stream, so these exact documents must be delivered.
+        Set<String> expectedNames = new HashSet<>();
         for (int i = 0; i < EXPECTED_RECORDS; i++) {
-            insertDoc("seed-" + i);
+            String name = "seed-" + i;
+            insertDoc(name);
+            expectedNames.add(name);
         }
 
-        // Keep writing after open so the change stream has a steady supply regardless of
-        // exactly when the subscription becomes active.
         source.open(buildConfig(), mock(SourceContext.class));
 
-        startBackgroundWriter();
-
-        int received = 0;
+        Set<String> receivedNames = new HashSet<>();
         for (int i = 0; i < EXPECTED_RECORDS; i++) {
             Record<byte[]> record = readOne();
             assertNotNull(record, "read() returned null");
@@ -135,15 +133,17 @@ public class MongoSourceContainerTest {
             assertNotNull(fullDocument, "record missing fullDocument");
 
             String name = fullDocument.getString("name");
-            assertNotNull(name, "fullDocument missing name");
-            assertTrue(name.startsWith("seed-"), "unexpected fullDocument name: " + name);
-
+            assertTrue(expectedNames.contains(name),
+                    "received an unexpected document '" + name + "'; FULL_SYNC should replay only "
+                            + "the seeded documents " + expectedNames);
             log.info("Received change-stream record: key={} name={}",
                     record.getKey().orElse(null), name);
-            received++;
+            receivedNames.add(name);
         }
-        assertTrue(received >= EXPECTED_RECORDS,
-                "Expected at least " + EXPECTED_RECORDS + " records, got " + received);
+
+        // Every seeded document was replayed exactly once through the change stream.
+        assertEquals(receivedNames, expectedNames,
+                "FULL_SYNC did not replay all seeded documents; got " + receivedNames);
     }
 
     /**
@@ -161,26 +161,6 @@ public class MongoSourceContainerTest {
                     + "s waiting for a record from the MongoDB change stream. The source produced "
                     + "no record; see the logs above.", e);
         }
-    }
-
-    private void startBackgroundWriter() {
-        keepWriting.set(true);
-        final AtomicInteger counter = new AtomicInteger();
-        writerThread = new Thread(() -> {
-            while (keepWriting.get()) {
-                try {
-                    insertDoc("live-" + counter.incrementAndGet());
-                    Thread.sleep(500);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    return;
-                } catch (Exception e) {
-                    log.warn("Background write failed", e);
-                }
-            }
-        }, "mongo-it-writer");
-        writerThread.setDaemon(true);
-        writerThread.start();
     }
 
     private void insertDoc(String name) {
