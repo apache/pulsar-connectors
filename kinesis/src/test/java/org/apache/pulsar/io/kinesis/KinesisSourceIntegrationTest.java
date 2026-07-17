@@ -108,14 +108,16 @@ public class KinesisSourceIntegrationTest {
         });
 
         client = createClient();
+        // Bound every blocking AWS call: @BeforeMethod is not covered by @Test(timeOut=...), so an
+        // unbounded future.get() here could hang the suite if LocalStack stalls.
         client.createStream(CreateStreamRequest.builder()
                 .streamName(STREAM_NAME)
                 .shardCount(1)
-                .build()).get();
+                .build()).get(30, TimeUnit.SECONDS);
 
         Awaitility.await().atMost(60, TimeUnit.SECONDS).until(() ->
                 client.describeStream(DescribeStreamRequest.builder().streamName(STREAM_NAME).build())
-                        .get().streamDescription().streamStatus() == StreamStatus.ACTIVE);
+                        .get(10, TimeUnit.SECONDS).streamDescription().streamStatus() == StreamStatus.ACTIVE);
         log.info("Created Kinesis stream {}", STREAM_NAME);
 
         source = new KinesisSource();
@@ -140,7 +142,7 @@ public class KinesisSourceIntegrationTest {
         }
         if (client != null) {
             try {
-                client.deleteStream(builder -> builder.streamName(STREAM_NAME)).get();
+                client.deleteStream(builder -> builder.streamName(STREAM_NAME)).get(30, TimeUnit.SECONDS);
             } catch (Exception e) {
                 log.warn("Failed to delete stream", e);
             }
@@ -162,23 +164,24 @@ public class KinesisSourceIntegrationTest {
         SourceContext sourceContext = mock(SourceContext.class);
         source.open(buildConfig(), sourceContext);
 
-        int received = 0;
         for (int i = 0; i < EXPECTED_RECORDS; i++) {
             KinesisRecord record = readOne();
             assertNotNull(record, "read() returned null");
+
+            // The emitted value and key must carry what we put on the stream: putRecord writes a
+            // "value-<id>" payload under a "pk-<id>" partition key (id = seed-* or live-*).
             assertNotNull(record.getValue(), "record had no value");
-            assertTrue(record.getValue().length > 0, "record value was empty");
+            String value = new String(record.getValue(), StandardCharsets.UTF_8);
+            assertTrue(value.startsWith("value-"), "unexpected record value: " + value);
             assertTrue(record.getKey().isPresent(), "record had no key (partition key)");
+            assertTrue(record.getKey().get().startsWith("pk-"),
+                    "unexpected partition key: " + record.getKey().get());
             assertTrue(record.getProperties().containsKey(KinesisRecord.SEQUENCE_NUMBER),
                     "record missing SEQUENCE_NUMBER property; got " + record.getProperties());
             log.info("Received Kinesis record: key={} value={} seq={}",
-                    record.getKey().orElse(null),
-                    new String(record.getValue(), StandardCharsets.UTF_8),
+                    record.getKey().get(), value,
                     record.getProperties().get(KinesisRecord.SEQUENCE_NUMBER));
-            received++;
         }
-        assertTrue(received >= EXPECTED_RECORDS,
-                "Expected at least " + EXPECTED_RECORDS + " records, got " + received);
     }
 
     /**
@@ -255,7 +258,7 @@ public class KinesisSourceIntegrationTest {
                         return AwsBasicCredentials.create(ACCESS_KEY, SECRET_KEY);
                     }
                 })
-                .region(Region.US_EAST_1)
+                .region(Region.of(REGION))
                 .endpointOverride(LOCAL_STACK_CONTAINER.getEndpointOverride(LocalStackContainer.Service.KINESIS))
                 .build();
     }
