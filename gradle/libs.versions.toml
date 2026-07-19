@@ -430,6 +430,7 @@ testcontainers-mariadb = { module = "org.testcontainers:mariadb" }
 testcontainers-clickhouse = { module = "org.testcontainers:clickhouse" }
 testcontainers-postgresql = { module = "org.testcontainers:postgresql" }
 testcontainers-mongodb = { module = "org.testcontainers:mongodb" }
+testcontainers-mssqlserver = { module = "org.testcontainers:mssqlserver" }
 testcontainers-pulsar = { module = "org.testcontainers:pulsar" }
 testcontainers-cassandra = { module = "org.testcontainers:cassandra" }
 testcontainers-k3s = { module = "org.testcontainers:k3s" }
