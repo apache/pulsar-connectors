@@ -18,7 +18,6 @@
  */
 package org.apache.pulsar.io.aeron;
 
-import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.TimeUnit;
@@ -43,7 +42,9 @@ public final class IdleStrategies {
     public static final String YIELDING = "yielding";
     public static final String BUSYSPIN = "busyspin";
 
-    private static final List<String> SUPPORTED = Arrays.asList(BACKOFF, SLEEPING, YIELDING, BUSYSPIN);
+    // Immutable: supportedStrategies() hands this straight out, and a caller mutating it
+    // would silently change what isSupported()/create() accept.
+    private static final List<String> SUPPORTED = List.of(BACKOFF, SLEEPING, YIELDING, BUSYSPIN);
 
     // Agrona's conventional backoff defaults: spin, then yield, then park between 1us and 1ms.
     private static final long BACKOFF_MAX_SPINS = 100L;

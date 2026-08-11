@@ -146,6 +146,14 @@ public class AeronSource extends PushSource<byte[]> {
                     LOG.warn("Aeron poll thread did not stop within {} ms; interrupting",
                             POLLER_JOIN_TIMEOUT_MS);
                     pollerThread.interrupt();
+                    // Wait again rather than falling straight through: closing the
+                    // subscription while the loop is still inside poll() races with Aeron's
+                    // own teardown and surfaces as spurious exceptions during shutdown.
+                    pollerThread.join(POLLER_JOIN_TIMEOUT_MS);
+                    if (pollerThread.isAlive()) {
+                        LOG.warn("Aeron poll thread still alive after interrupt; "
+                                + "closing the subscription anyway");
+                    }
                 }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();

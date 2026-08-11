@@ -86,6 +86,16 @@ public class IdleStrategiesTest {
     }
 
     @Test
+    public void testSupportedStrategiesIsImmutable() {
+        // The list is handed straight out, so a caller mutating it would silently change what
+        // isSupported() and create() accept.
+        assertThatThrownBy(() -> IdleStrategies.supportedStrategies().set(0, "nonsense"))
+                .isInstanceOf(UnsupportedOperationException.class);
+        assertThatThrownBy(() -> IdleStrategies.supportedStrategies().add("nonsense"))
+                .isInstanceOf(UnsupportedOperationException.class);
+    }
+
+    @Test
     public void testSupportedStrategiesListsAllFour() {
         assertThat(IdleStrategies.supportedStrategies())
                 .containsExactlyInAnyOrder(IdleStrategies.BACKOFF, IdleStrategies.SLEEPING,
