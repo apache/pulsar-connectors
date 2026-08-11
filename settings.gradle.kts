@@ -62,6 +62,7 @@ require(providers.gradleProperty("skipJavaVersionCheck").isPresent
 include("pulsar-connectors-dependencies")
 
 // Simple connectors (flat layout, top-level directories)
+include("aeron")
 include("aerospike")
 include("alluxio")
 include("aws")

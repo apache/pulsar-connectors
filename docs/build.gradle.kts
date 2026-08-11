@@ -52,6 +52,7 @@ dependencies {
     implementation(project(":kinesis"))
     implementation(project(":mongo"))
     implementation(project(":netty"))
+    implementation(project(":aeron"))
     implementation(project(":nsq"))
     implementation(project(":rabbitmq"))
     implementation(project(":redis"))

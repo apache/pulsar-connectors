@@ -56,6 +56,7 @@ dependencies {
     connectorNars(project(":file"))
     connectorNars(project(":canal"))
     connectorNars(project(":netty"))
+    connectorNars(project(":aeron"))
     connectorNars(project(":mongo"))
     connectorNars(project(":debezium:pulsar-io-debezium-mariadb"))
     connectorNars(project(":debezium:pulsar-io-debezium-mysql"))

@@ -29,6 +29,7 @@ bookkeeper = "4.17.3"
 zookeeper = "3.9.5"
 netty = "4.1.132.Final"
 netty-iouring = "0.0.26.Final"
+aeron = "1.48.0"
 jetty = "12.1.8"
 jetty9 = "9.4.58.v20250814"
 jersey = "2.42"
@@ -221,6 +222,13 @@ netty-codec-http = { module = "io.netty:netty-codec-http" }
 netty-incubator-transport-classes-io_uring = { module = "io.netty.incubator:netty-incubator-transport-classes-io_uring", version.ref = "netty-iouring" }
 netty-incubator-transport-native-io-uring = { module = "io.netty.incubator:netty-incubator-transport-native-io_uring", version.ref = "netty-iouring" }
 netty-reactive-streams = { module = "com.typesafe.netty:netty-reactive-streams", version.ref = "netty-reactive-streams" }
+
+# Aeron. aeron-driver is needed for the embedded media driver; it depends on
+# aeron-client, which brings agrona transitively. The aeron-all uber-jar is
+# deliberately not used: it duplicates agrona and pulls in archive/cluster code
+# the source connector does not need.
+aeron-client = { module = "io.aeron:aeron-client", version.ref = "aeron" }
+aeron-driver = { module = "io.aeron:aeron-driver", version.ref = "aeron" }
 # Protobuf / gRPC
 protobuf-bom = { module = "com.google.protobuf:protobuf-bom", version.ref = "protobuf" }
 protobuf-java = { module = "com.google.protobuf:protobuf-java" }
