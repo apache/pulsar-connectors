@@ -55,13 +55,19 @@ public class AeronPublisher {
     private static final ThreadLocal<UnsafeBuffer> BUFFER = ThreadLocal.withInitial(UnsafeBuffer::new);
 
     private final OfferFunction offerFunction;
-    private final IdleStrategy idleStrategy;
     private final long offerTimeoutNanos;
+
+    // Per-thread for the same reason as BUFFER. An IdleStrategy accumulates spin/yield/park
+    // state, so sharing one across concurrent write() calls would let threads drive each
+    // other's backoff — one thread's reset() dropping another back to spinning, or a thread
+    // inheriting a park interval it never earned.
+    private final ThreadLocal<IdleStrategy> idleStrategy;
 
     public AeronPublisher(OfferFunction offerFunction, AeronSinkConfig config) {
         this.offerFunction = offerFunction;
-        this.idleStrategy = IdleStrategies.create(config.getIdleStrategy());
         this.offerTimeoutNanos = TimeUnit.MILLISECONDS.toNanos(config.getOfferTimeoutMs());
+        final String strategyName = config.getIdleStrategy();
+        this.idleStrategy = ThreadLocal.withInitial(() -> IdleStrategies.create(strategyName));
     }
 
     /**
@@ -78,7 +84,8 @@ public class AeronPublisher {
 
         // Idle strategies carry spin/yield state across calls; a stale one would start this
         // offer already parked at its maximum backoff.
-        idleStrategy.reset();
+        final IdleStrategy idle = idleStrategy.get();
+        idle.reset();
 
         final long deadline = System.nanoTime() + offerTimeoutNanos;
         while (true) {
@@ -107,7 +114,7 @@ public class AeronPublisher {
             if (System.nanoTime() >= deadline) {
                 return OfferOutcome.TIMED_OUT;
             }
-            idleStrategy.idle();
+            idle.idle();
         }
     }
 }

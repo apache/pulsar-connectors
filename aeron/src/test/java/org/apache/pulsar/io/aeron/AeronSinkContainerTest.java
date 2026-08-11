@@ -272,6 +272,15 @@ public class AeronSinkContainerTest {
                 if (!Thread.currentThread().isInterrupted()) {
                     pumpFailure = e;
                 }
+            } finally {
+                // Owned by this thread, so closed here. Relying on pulsarClient.close() to
+                // sweep it up leaves the subscription open if the pump exits early, which
+                // makes teardown slower and flakier.
+                try {
+                    consumer.close();
+                } catch (Exception e) {
+                    // Ignored: teardown must not mask a real test failure.
+                }
             }
         }, "aeron-sink-ct-pump");
         pumpThread.setDaemon(true);

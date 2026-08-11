@@ -22,6 +22,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import io.aeron.Publication;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.testng.annotations.Test;
 
@@ -191,6 +198,49 @@ public class AeronPublisherTest {
         assertThat(publisher.publish(new byte[0]))
                 .isEqualTo(AeronPublisher.OfferOutcome.PUBLISHED);
         assertThat(observedLength.get()).isZero();
+    }
+
+    @Test
+    public void testConcurrentPublishesDoNotShareIdleState() throws Exception {
+        // The sink uses a concurrent Publication precisely because the framework may call
+        // write() from several threads. An IdleStrategy accumulates spin/yield/park state, so
+        // a single shared instance would let threads drive each other's backoff. Each thread
+        // must get its own.
+        final int threads = 8;
+        final int perThread = 50;
+        // Back-pressure every third offer so the retry path — and the idle strategy — is
+        // actually exercised rather than every call succeeding first time.
+        final AtomicInteger offers = new AtomicInteger();
+        AeronPublisher publisher = new AeronPublisher(
+                (b, o, l) -> offers.incrementAndGet() % 3 == 0 ? Publication.BACK_PRESSURED : 128L,
+                config(30_000));
+
+        ExecutorService pool = Executors.newFixedThreadPool(threads);
+        try {
+            CountDownLatch start = new CountDownLatch(1);
+            List<Future<Integer>> futures = new ArrayList<>();
+            for (int t = 0; t < threads; t++) {
+                futures.add(pool.submit(() -> {
+                    start.await();
+                    int published = 0;
+                    for (int i = 0; i < perThread; i++) {
+                        if (publisher.publish(PAYLOAD) == AeronPublisher.OfferOutcome.PUBLISHED) {
+                            published++;
+                        }
+                    }
+                    return published;
+                }));
+            }
+            start.countDown();
+
+            int total = 0;
+            for (Future<Integer> f : futures) {
+                total += f.get(60, TimeUnit.SECONDS);
+            }
+            assertThat(total).isEqualTo(threads * perThread);
+        } finally {
+            pool.shutdownNow();
+        }
     }
 
     @Test
