@@ -41,9 +41,13 @@ import java.util.Set;
  * <h2>Failures stall rather than skip</h2>
  *
  * <p>A failed record is left in place. The watermark stops behind it and stops advancing, so the
- * next restart replays from before the failure instead of stepping over it. A permanently failing
- * record therefore halts checkpoint progress, which is the correct trade for a lossless mode:
- * repeated work is recoverable, skipped data is not.
+ * next restart replays from before the failure instead of stepping over it.
+ *
+ * <p>This is only half the answer, and on its own it would not deliver at-least-once: the replay
+ * cursor has already moved past the record, so nothing re-emits it within this process. The caller
+ * therefore also fails the source on a publish failure, so the runtime restarts it and the
+ * stalled watermark decides where replay resumes. This class holds the position; it does not
+ * decide the policy.
  *
  * <p>Acknowledgements arrive on framework threads while emissions happen on the poller thread, so
  * every method is synchronized. The critical sections are a few pointer moves and are dwarfed by

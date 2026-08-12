@@ -22,7 +22,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.fail;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 import io.aeron.Aeron;
@@ -86,6 +88,8 @@ public class AeronArchiveSourceIntegrationTest {
     private Map<String, ByteBuffer> state;
     /** Lets a test withhold acknowledgements to model records stuck mid-publish. */
     private volatile boolean ackRecords = true;
+    /** Models a downstream publish failure. */
+    private volatile boolean failRecords;
     private String controlRequestChannel;
     private String controlResponseChannel;
 
@@ -97,6 +101,7 @@ public class AeronArchiveSourceIntegrationTest {
         rootDir = Files.createTempDirectory(parent, "aeron-archive-it-");
         collected = new CopyOnWriteArrayList<>();
         ackRecords = true;
+        failRecords = false;
         state = new ConcurrentHashMap<>();
         sourceContext = mock(SourceContext.class);
         // Real read/write semantics, so checkpointing and resume are genuinely exercised rather
@@ -295,7 +300,9 @@ public class AeronArchiveSourceIntegrationTest {
                     // without acking modelled a world where publishing always succeeds
                     // instantly — which is precisely why the earlier revision's checkpointing
                     // bug was invisible to these tests.
-                    if (ackRecords) {
+                    if (failRecords) {
+                        record.fail();
+                    } else if (ackRecords) {
                         record.ack();
                     }
                 }
@@ -734,6 +741,26 @@ public class AeronArchiveSourceIntegrationTest {
         } finally {
             closeQuietly(bad);
         }
+    }
+
+    @Test
+    public void testPublishFailureFailsTheSourceSoItRestartsAndReplays() throws Exception {
+        // Stalling the watermark alone is not at-least-once: the replay cursor has already moved
+        // past the record, so nothing re-emits it and the message would stay absent from Pulsar
+        // while the source looked healthy. The instance must fail so the runtime restarts it.
+        failRecords = true;
+        recordMessages(List.of("will-fail"));
+
+        startSource(archiveConfig());
+        awaitRecords(1);
+
+        Awaitility.await("source reported the failure as fatal")
+                .atMost(TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                .pollInterval(100, TimeUnit.MILLISECONDS)
+                .untilAsserted(() -> verify(sourceContext, atLeastOnce()).fatal(any()));
+
+        // And nothing was committed, so a restart replays the failed record.
+        assertThat(state).as("a failed record must not be checkpointed").isEmpty();
     }
 
     @Test

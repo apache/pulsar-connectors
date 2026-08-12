@@ -91,8 +91,13 @@ import org.slf4j.LoggerFactory;
  * published — silent loss in the mode meant to prevent exactly that.
  *
  * <p>A crash between publish and checkpoint replays the window since the last checkpoint, so
- * duplicates are possible; {@code checkpointEveryRecords} bounds it. A record the framework
- * <em>fails</em> stalls the watermark rather than being stepped over, so a restart replays it.
+ * duplicates are possible; {@code checkpointEveryRecords} bounds it.
+ *
+ * <p>A record the framework <em>fails</em> stalls the watermark <em>and</em> fails the source.
+ * Stalling alone would not be enough: the replay cursor has already moved past the record, so
+ * nothing would re-emit it and the message would stay absent from Pulsar while the connector
+ * looked healthy. Failing the instance lets the runtime restart it and replay from the
+ * checkpoint.
  *
  * <p><b>No record sequence is set.</b> An earlier revision exposed the archive position as
  * {@link Record#getRecordSequence()} so broker deduplication could give effectively-once, but
@@ -468,6 +473,20 @@ public class ArchivePollingRunner implements AeronPoller {
             @Override
             public void failed() {
                 commitTracker.failed(position);
+                // Stalling the watermark stops the failure being checkpointed past, but nothing
+                // re-emits the record in this process: the replay cursor has moved on, so the
+                // message would stay absent from Pulsar while the source looked healthy. That is
+                // not at-least-once. Failing the instance lets the runtime restart it, which
+                // resumes from the checkpoint and replays the record. Same approach as the
+                // Kinesis source.
+                LOG.error("Publishing a record at recordingId={} position={} failed; failing the "
+                                + "source so it restarts and replays from the last checkpoint",
+                        currentRecordingId, position);
+                if (sourceContext != null) {
+                    sourceContext.fatal(new IllegalStateException(
+                            "Failed to publish Aeron archive record at recordingId="
+                                    + currentRecordingId + " position=" + position));
+                }
             }
         }));
         recordMetric(METRIC_RECORDS_CONSUMED, 1);
