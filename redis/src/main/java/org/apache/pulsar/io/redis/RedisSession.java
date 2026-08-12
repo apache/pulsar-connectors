@@ -18,6 +18,7 @@
  */
 package org.apache.pulsar.io.redis;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.Lists;
 import com.google.common.net.HostAndPort;
 import io.lettuce.core.AbstractRedisClient;
@@ -123,14 +124,19 @@ public class RedisSession {
         return redisSession;
     }
 
-    private static List<RedisURI> redisURIs(List<HostAndPort> hostAndPorts, RedisSinkConfig config) {
+    @VisibleForTesting
+    static List<RedisURI> redisURIs(List<HostAndPort> hostAndPorts, RedisSinkConfig config) {
         List<RedisURI> redisURIs = Lists.newArrayList();
         for (HostAndPort hostAndPort : hostAndPorts) {
             RedisURI.Builder builder = RedisURI.builder();
             builder.withHost(hostAndPort.getHost());
             builder.withPort(hostAndPort.getPort());
             builder.withDatabase(config.getRedisDatabase());
-            if (!StringUtils.isBlank(config.getRedisPassword())) {
+            builder.withSsl(config.isRedisUseTls());
+            if (!StringUtils.isBlank(config.getRedisUser()) && !StringUtils.isBlank(config.getRedisPassword())) {
+                builder.withAuthentication(config.getRedisUser(), config.getRedisPassword());
+            } else if (!StringUtils.isBlank(config.getRedisPassword())) {
+                // authenticates as the "default" user
                 builder.withPassword(config.getRedisPassword());
             }
             redisURIs.add(builder.build());

@@ -20,8 +20,10 @@
 {
 "redisHosts": "localhost:6379",
 "redisPassword": "fake@123",
+"redisUser": "fake-user",
 "redisDatabase": "1",
 "clientMode": "Standalone",
+"redisUseTls": "true",
 "operationTimeout": "2000",
 "batchSize": "100",
 "batchTimeMs": "1000",
