@@ -74,20 +74,37 @@ final class ArchiveCheckpoint {
         }
     }
 
+    /**
+     * Reads the stored checkpoint.
+     *
+     * <p>Returns empty <b>only</b> for a confirmed absent or unreadably short value. A store
+     * failure propagates rather than being reported as "no checkpoint": treating a transient read
+     * error as an absent checkpoint would silently restart from configured history and re-ingest
+     * the recording, which is precisely the failure archive mode exists to prevent. Failing
+     * startup is recoverable; silently re-ingesting looks like success.
+     *
+     * @throws IllegalStateException if the state store could not be read
+     */
     Optional<Position> read() {
+        final ByteBuffer buffer;
         try {
-            final ByteBuffer buffer = sourceContext.getState(key);
-            if (buffer == null || buffer.remaining() < SERIALIZED_BYTES) {
-                return Optional.empty();
-            }
-            final ByteBuffer readable = buffer.duplicate();
-            return Optional.of(new Position(readable.getLong(), readable.getLong()));
+            buffer = sourceContext.getState(key);
         } catch (Exception e) {
-            // A missing key can surface as an exception rather than null depending on the state
-            // implementation; treat it as "no checkpoint yet" rather than failing the source.
-            LOG.debug("No usable archive checkpoint under {}", key, e);
+            throw new IllegalStateException(
+                    "Could not read the Aeron archive checkpoint under '" + key + "'. Refusing to "
+                            + "continue, because treating this as an absent checkpoint would "
+                            + "re-ingest the recording from the configured start position.", e);
+        }
+        if (buffer == null) {
             return Optional.empty();
         }
+        if (buffer.remaining() < SERIALIZED_BYTES) {
+            LOG.warn("Ignoring a truncated archive checkpoint under {} ({} bytes, expected {})",
+                    key, buffer.remaining(), SERIALIZED_BYTES);
+            return Optional.empty();
+        }
+        final ByteBuffer readable = buffer.duplicate();
+        return Optional.of(new Position(readable.getLong(), readable.getLong()));
     }
 
     /**
@@ -108,7 +125,24 @@ final class ArchiveCheckpoint {
             deleteFailure = e;
         }
 
-        if (read().isPresent()) {
+        // Verify rather than assume. read() now propagates store failures, so a delete that
+        // failed AND a verification read that failed can no longer be mistaken for a successful
+        // reset — the read throws and the reset is reported as failed, which is correct.
+        final boolean stillPresent;
+        try {
+            stillPresent = read().isPresent();
+        } catch (Exception readFailure) {
+            final IllegalStateException error = new IllegalStateException(
+                    "resetCheckpoint was requested but the stored checkpoint under '" + key
+                            + "' could neither be deleted nor verified, so whether the reset took "
+                            + "effect is unknown. Failing rather than guessing.", readFailure);
+            if (deleteFailure != null) {
+                error.addSuppressed(deleteFailure);
+            }
+            throw error;
+        }
+
+        if (stillPresent) {
             throw new IllegalStateException(
                     "resetCheckpoint was requested but the stored checkpoint under '" + key
                             + "' could not be deleted. Continuing would resume from the old "

@@ -674,6 +674,69 @@ public class AeronArchiveSourceIntegrationTest {
     }
 
     @Test
+    public void testNonexistentRecordingIdFailsFastRatherThanIdling() throws Exception {
+        // Without the descriptor check this returned a synthetic position 0, every subsequent
+        // position query answered NULL_POSITION, and the loop idled forever while the source
+        // reported itself healthy and emitted nothing.
+        recordMessages(List.of("present"));
+
+        Map<String, Object> config = archiveConfig();
+        config.put("recordingId", 9999L);
+
+        AeronSource bad = new AeronSource();
+        try {
+            bad.open(config, sourceContext);
+            fail("Expected open() to reject a recordingId that does not exist");
+        } catch (Exception e) {
+            assertThat(e).isInstanceOf(IllegalStateException.class);
+            assertThat(e).hasMessageContaining("no recording with id 9999");
+        } finally {
+            closeQuietly(bad);
+        }
+    }
+
+    @Test
+    public void testUnreadableCheckpointStoreFailsRatherThanReingesting() throws Exception {
+        // A transient read failure previously read as "no checkpoint", which would restart from
+        // configured history and silently re-ingest the recording.
+        recordMessages(List.of("m1", "m2"));
+        Map<String, Object> config = archiveConfig();
+        config.put("checkpointEveryRecords", 1);
+        startSource(config);
+        awaitRecords(2);
+        Awaitility.await("checkpoint written")
+                .atMost(TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                .until(() -> !state.isEmpty());
+
+        readerThread.interrupt();
+        readerThread = null;
+        source.close();
+        source = null;
+
+        // requireAvailable() succeeds, then the read for the checkpoint itself blows up.
+        final java.util.concurrent.atomic.AtomicInteger reads =
+                new java.util.concurrent.atomic.AtomicInteger();
+        when(sourceContext.getState(anyString())).thenAnswer(inv -> {
+            if (reads.incrementAndGet() > 1) {
+                throw new IllegalStateException("state store unavailable");
+            }
+            ByteBuffer stored = state.get(inv.<String>getArgument(0));
+            return stored == null ? null : stored.duplicate();
+        });
+
+        AeronSource bad = new AeronSource();
+        try {
+            bad.open(config, sourceContext);
+            fail("Expected open() to fail when the checkpoint could not be read");
+        } catch (Exception e) {
+            assertThat(e).isInstanceOf(IllegalStateException.class);
+            assertThat(e).hasMessageContaining("Could not read the Aeron archive checkpoint");
+        } finally {
+            closeQuietly(bad);
+        }
+    }
+
+    @Test
     public void testMissingRecordingFailsFast() {
         // Nothing has been recorded for this stream, so discovery must fail loudly rather than
         // sit silently delivering nothing.

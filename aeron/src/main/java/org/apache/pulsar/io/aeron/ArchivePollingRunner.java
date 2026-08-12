@@ -116,6 +116,10 @@ public class ArchivePollingRunner implements AeronPoller {
     /** Bound on waiting for a replay image, so a stuck replay retries instead of hanging. */
     private static final long REPLAY_CONNECT_TIMEOUT_SECONDS = 30L;
 
+    /** Throttle for the rotation-blocked warning, which would otherwise spin. */
+    private static final long ROTATION_STALL_LOG_INTERVAL_NANOS =
+            TimeUnit.SECONDS.toNanos(30);
+
     private final AeronArchive archive;
     private final AeronSourceConfig config;
     private final Consumer<Record<byte[]>> consumer;
@@ -130,6 +134,7 @@ public class ArchivePollingRunner implements AeronPoller {
     private long recordsSinceCheckpoint;
     private long lastCheckpointedPosition = Long.MIN_VALUE;
     private long lastCheckpointedRecording = Aeron.NULL_VALUE;
+    private long lastRotationStallLogNanos;
 
     private volatile boolean running = true;
 
@@ -259,11 +264,20 @@ public class ArchivePollingRunner implements AeronPoller {
      */
     private long recordingStartPosition(long recordingId) {
         final MutableLong start = new MutableLong(0L);
-        archive.listRecording(recordingId,
+        final int found = archive.listRecording(recordingId,
                 (controlSessionId, correlationId, id, startTimestamp, stopTimestamp,
                  startPosition, stopPosition, initialTermId, segmentFileLength, termBufferLength,
                  mtuLength, sessionId, streamId, strippedChannel, originalChannel,
                  sourceIdentity) -> start.set(startPosition));
+        if (found == 0) {
+            // Returning a synthetic 0 here would be worse than failing: every subsequent position
+            // query answers NULL_POSITION, the loop treats the recording as merely still being
+            // written, and the source idles forever while reporting itself healthy.
+            throw new IllegalStateException(
+                    "Aeron Archive has no recording with id " + recordingId
+                            + ". Check 'recordingId', or leave it unset to discover the newest "
+                            + "recording for the configured channel and stream");
+        }
         return start.get();
     }
 
@@ -381,6 +395,29 @@ public class ArchivePollingRunner implements AeronPoller {
         if (stop == AeronArchive.NULL_POSITION || currentPosition < stop) {
             return false;  // still being written, or not caught up
         }
+
+        // Rotating with records still awaiting acknowledgement would be unsafe twice over.
+        // Resetting the tracker discards those pending entries, so their positions could never be
+        // committed; and because positions restart in the successor, a late acknowledgement for an
+        // old position can collide with a successor position and advance ITS watermark, skipping
+        // unpublished successor records after a crash. So drain first.
+        final int inFlight = commitTracker.pending();
+        if (inFlight > 0) {
+            final long now = System.nanoTime();
+            if (now - lastRotationStallLogNanos > ROTATION_STALL_LOG_INTERVAL_NANOS) {
+                lastRotationStallLogNanos = now;
+                LOG.warn("Recording {} is complete but {} record(s) are still awaiting "
+                                + "acknowledgement, so rotation is waiting. A record the framework "
+                                + "never acknowledges will hold this indefinitely, which is "
+                                + "deliberate: advancing would skip unpublished data.",
+                        currentRecordingId, inFlight);
+            }
+            return false;
+        }
+
+        // Persist the old recording's final watermark before the cursor moves, so a crash during
+        // the switch resumes at its end rather than somewhere earlier.
+        writeCheckpointIfAdvanced();
 
         final long next = discoverRecording(currentRecordingId);
         if (next == Aeron.NULL_VALUE) {
