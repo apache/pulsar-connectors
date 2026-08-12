@@ -18,6 +18,8 @@
 #
 
 name: aeron
-description: Aeron Source Connector
+description: Aeron source and sink connector
 sourceClass: org.apache.pulsar.io.aeron.AeronSource
 sourceConfigClass: org.apache.pulsar.io.aeron.AeronSourceConfig
+sinkClass: org.apache.pulsar.io.aeron.AeronSink
+sinkConfigClass: org.apache.pulsar.io.aeron.AeronSinkConfig
