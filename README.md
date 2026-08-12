@@ -32,6 +32,7 @@ mounting them into the `apachepulsar/pulsar` Docker image.
 ### Sources
 | Connector | Description |
 |-----------|-------------|
+| Aeron | Aeron UDP unicast/multicast and IPC transport |
 | Canal | MySQL binlog via Alibaba Canal |
 | Debezium (MySQL, MariaDB, PostgreSQL, MongoDB, MSSQL, Oracle) | CDC via Debezium |
 | DynamoDB | Amazon DynamoDB Streams |
