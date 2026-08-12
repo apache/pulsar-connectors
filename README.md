@@ -46,6 +46,7 @@ mounting them into the `apachepulsar/pulsar` Docker image.
 ### Sinks
 | Connector | Description |
 |-----------|-------------|
+| Aeron | Aeron UDP unicast/multicast and IPC transport |
 | Aerospike | Aerospike database |
 | Alluxio | Alluxio distributed storage |
 | Azure Data Explorer | Azure Data Explorer (Kusto) |
