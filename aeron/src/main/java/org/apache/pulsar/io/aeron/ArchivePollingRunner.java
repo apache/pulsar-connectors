@@ -100,6 +100,14 @@ import org.slf4j.LoggerFactory;
  * looked healthy. Failing the instance lets the runtime restart it and replay from the
  * checkpoint.
  *
+ * <h2>One active recording at a time</h2>
+ *
+ * <p>Transport mode receives from every publication on a channel and stream. Archive mode cannot:
+ * the archive records each session separately, so concurrent publishers produce concurrent
+ * recordings and this replays one at a time. Rather than silently dropping the others, it fails at
+ * {@code open()} when more than one is active. Give each publisher a distinct channel or stream,
+ * or pin {@code recordingId} and run a source per recording.
+ *
  * <p><b>No record sequence is set.</b> An earlier revision exposed the archive position as
  * {@link Record#getRecordSequence()} so broker deduplication could give effectively-once, but
  * archive positions restart with each recording. After a rotation the same producer would emit
@@ -133,6 +141,16 @@ public class ArchivePollingRunner implements AeronPoller {
     private final ArchiveCheckpoint checkpoint;
     private final IdleStrategy idleStrategy;
     private CommitTracker commitTracker;
+    /**
+     * Reassembly state, deliberately held across chunks rather than created per chunk.
+     *
+     * <p>On a live recording the chunk bound comes from {@code getRecordingPosition()}, which can
+     * fall <em>between</em> fragments of a larger-than-MTU message. A per-chunk assembler would
+     * hold the BEGIN fragment, be discarded at the end of the chunk, and the next chunk would
+     * start on a continuation fragment with a fresh assembler that drops it — losing the message
+     * silently. Reset only when the cursor jumps to a different recording.
+     */
+    private FragmentAssembler assembler;
 
     /** Mutable replay cursor, advanced by the fragment handler. */
     private long currentRecordingId;
@@ -165,8 +183,60 @@ public class ArchivePollingRunner implements AeronPoller {
         this.idleStrategy = IdleStrategies.create(config.getIdleStrategy());
 
         checkpoint.requireAvailable();
+        rejectConcurrentRecordings();
         resumeOrStart();
         this.commitTracker = new CommitTracker(currentPosition);
+        this.assembler = newAssembler();
+    }
+
+    /**
+     * Fails when more than one recording for this channel and stream is currently active.
+     *
+     * <p>Transport mode subscribes to a channel and stream and receives from <em>every</em>
+     * publication on it. Archive mode cannot match that: the archive records each session
+     * separately, so concurrent publishers produce concurrent recordings, and this replays one at
+     * a time. The others would never be replayed — and because discovery only ever moves to
+     * higher recording ids, lower ones could never be picked up later either.
+     *
+     * <p>Rather than silently dropping those publishers' data, archive mode requires a single
+     * active recording and says so. Historical recordings are fine: rotation walks them in id
+     * order, though it replays each in full rather than interleaving them as the live transport
+     * would.
+     */
+    private void rejectConcurrentRecordings() {
+        final MutableLong active = new MutableLong(0);
+        final StringBuilder ids = new StringBuilder();
+        long from = 0;
+        int matched;
+        final MutableLong highestSeen = new MutableLong(Aeron.NULL_VALUE);
+        do {
+            highestSeen.set(Aeron.NULL_VALUE);
+            matched = archive.listRecordingsForUri(from, LIST_PAGE_SIZE,
+                    config.getChannel(), config.getStreamId(),
+                    (controlSessionId, correlationId, recordingId, startTimestamp, stopTimestamp,
+                     startPosition, stopPosition, initialTermId, segmentFileLength,
+                     termBufferLength, mtuLength, sessionId, streamId, strippedChannel,
+                     originalChannel, sourceIdentity) -> {
+                        highestSeen.set(Math.max(highestSeen.get(), recordingId));
+                        if (stopPosition == AeronArchive.NULL_POSITION) {
+                            active.set(active.get() + 1);
+                            ids.append(ids.length() == 0 ? "" : ", ").append(recordingId);
+                        }
+                    });
+            if (matched > 0 && highestSeen.get() != Aeron.NULL_VALUE) {
+                from = highestSeen.get() + 1;
+            }
+        } while (matched == LIST_PAGE_SIZE);
+
+        if (active.get() > 1) {
+            throw new IllegalStateException(
+                    "Archive mode found " + active.get() + " concurrently active recordings for "
+                            + "channel '" + config.getChannel() + "' streamId "
+                            + config.getStreamId() + " (recordingIds: " + ids + "). It replays one "
+                            + "recording at a time, so the others would never be replayed. Use a "
+                            + "distinct channel or streamId per publisher, or set 'recordingId' "
+                            + "explicitly and run one source per recording.");
+        }
     }
 
     /**
@@ -345,17 +415,21 @@ public class ArchivePollingRunner implements AeronPoller {
         }
     }
 
+    /**
+     * Builds the reassembly buffer. Held across chunks rather than per chunk — see the field.
+     */
+    private FragmentAssembler newAssembler() {
+        return config.getFragmentAssemblyBufferLength() > 0
+                ? new FragmentAssembler(this::onFragment, config.getFragmentAssemblyBufferLength())
+                : new FragmentAssembler(this::onFragment);
+    }
+
     /** Replays from the current position up to {@code bound}, advancing the cursor as it goes. */
     private void replayChunk(long bound) {
         final long length = bound - currentPosition;
         try (Subscription replay = archive.replay(
                 currentRecordingId, currentPosition, length,
                 config.getReplayChannel(), config.getReplayStreamId())) {
-
-            final FragmentAssembler assembler = config.getFragmentAssemblyBufferLength() > 0
-                    ? new FragmentAssembler(this::onFragment,
-                            config.getFragmentAssemblyBufferLength())
-                    : new FragmentAssembler(this::onFragment);
 
             // "No image" means two opposite things — not connected yet, and finished then gone
             // away — and they are only distinguishable by whether an image was ever seen. Getting
@@ -452,6 +526,8 @@ public class ArchivePollingRunner implements AeronPoller {
         // where it begins rather than assuming.
         currentPosition = recordingStartPosition(next);
         commitTracker.reset(currentPosition);
+        // A partially assembled message cannot continue into a different recording.
+        assembler = newAssembler();
         recordsSinceCheckpoint = 0;
         writeCheckpointIfAdvanced();
         recordMetric(METRIC_RECORDINGS_ADVANCED, 1);

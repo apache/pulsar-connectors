@@ -815,6 +815,55 @@ public class AeronArchiveSourceIntegrationTest {
     }
 
     @Test
+    public void testConcurrentActiveRecordingsAreRejected() throws Exception {
+        // Two publishers on one channel and stream produce two recordings, because the archive
+        // records each session separately. Archive mode replays one at a time, so silently
+        // choosing one would drop the other publisher's data entirely.
+        archive.startRecording(CHANNEL, STREAM_ID, SourceLocation.LOCAL);
+        // Exclusive publications, because two ordinary ones on the same channel and stream share
+        // a single publication. Each exclusive publication gets its own session, which is what
+        // makes the archive create a separate recording per publisher.
+        try (Publication first = aeron.addExclusivePublication(CHANNEL, STREAM_ID);
+             Publication second = aeron.addExclusivePublication(CHANNEL, STREAM_ID)) {
+            Awaitility.await("both publications connected")
+                    .atMost(TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                    .until(() -> first.isConnected() && second.isConnected());
+            offer(first, "from-first".getBytes(StandardCharsets.UTF_8));
+            offer(second, "from-second".getBytes(StandardCharsets.UTF_8));
+
+            Awaitility.await("two active recordings registered")
+                    .atMost(TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                    .pollInterval(100, TimeUnit.MILLISECONDS)
+                    .until(this::countActiveRecordings, count -> count >= 2);
+
+            AeronSource bad = new AeronSource();
+            try {
+                bad.open(archiveConfig(), sourceContext);
+                fail("Expected open() to reject concurrently active recordings");
+            } catch (Exception e) {
+                assertThat(e).isInstanceOf(IllegalStateException.class);
+                assertThat(e).hasMessageContaining("concurrently active recordings");
+            } finally {
+                closeQuietly(bad);
+            }
+        } finally {
+            archive.stopRecording(CHANNEL, STREAM_ID);
+        }
+    }
+
+    private int countActiveRecordings() {
+        final org.agrona.collections.MutableInteger active =
+                new org.agrona.collections.MutableInteger();
+        archive.listRecordingsForUri(0, 100, CHANNEL, STREAM_ID,
+                (a, b, recId, c, d, e, stopPosition, f, g, h, i, j, k, l, m, n) -> {
+                    if (stopPosition == AeronArchive.NULL_POSITION) {
+                        active.increment();
+                    }
+                });
+        return active.get();
+    }
+
+    @Test
     public void testMissingRecordingFailsFast() {
         // Nothing has been recorded for this stream, so discovery must fail loudly rather than
         // sit silently delivering nothing.
