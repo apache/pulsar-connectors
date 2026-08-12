@@ -44,10 +44,13 @@ public class AeronRecord implements Record<byte[]> {
     public static final String PROP_CHANNEL = "aeron.channel";
     public static final String PROP_POSITION = "aeron.position";
     public static final String PROP_INGEST_TS = "aeron.ingest-ts";
+    /** Only present in archive mode. */
+    public static final String PROP_RECORDING_ID = "aeron.recording-id";
 
     private final byte[] value;
     private final String key;
     private final Map<String, String> properties;
+    private final Long recordSequence;
 
     /**
      * @param value      the reassembled payload; must already be a copy owned by this record
@@ -55,9 +58,25 @@ public class AeronRecord implements Record<byte[]> {
      * @param properties Aeron metadata; copied defensively
      */
     public AeronRecord(byte[] value, String key, Map<String, String> properties) {
+        this(value, key, properties, null);
+    }
+
+    /**
+     * @param recordSequence the archive position, or null when reading the live transport. Plain
+     *                       Aeron has no position that survives a restart, so offering one there
+     *                       would imply a resumability the transport does not have.
+     */
+    public AeronRecord(byte[] value, String key, Map<String, String> properties,
+                       Long recordSequence) {
         this.value = value;
         this.key = key;
         this.properties = Collections.unmodifiableMap(new HashMap<>(properties));
+        this.recordSequence = recordSequence;
+    }
+
+    @Override
+    public Optional<Long> getRecordSequence() {
+        return Optional.ofNullable(recordSequence);
     }
 
     @Override

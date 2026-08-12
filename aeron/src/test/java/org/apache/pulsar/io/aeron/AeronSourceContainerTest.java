@@ -94,6 +94,11 @@ public class AeronSourceContainerTest {
     @BeforeMethod
     public void setUp() throws Exception {
         pulsarContainer = new PulsarContainer(DockerImageName.parse(PULSAR_IMAGE))
+                // Starts the functions worker AND the stream storage (BookKeeper table) service.
+                // The container's default command appends "--no-functions-worker -nss", and it is
+                // the -nss ("no stream storage") that would leave the state store absent — which
+                // the source's archive mode requires for checkpointing.
+                .withFunctionsWorker()
                 .withStartupTimeout(Duration.ofMinutes(5));
         pulsarContainer.start();
 
