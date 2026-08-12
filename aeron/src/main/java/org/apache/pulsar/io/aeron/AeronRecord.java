@@ -33,9 +33,14 @@ import org.apache.pulsar.functions.api.Record;
  * callback returns, so the bytes must be copied before the record leaves the polling
  * thread. See {@link AeronPollingRunner}.
  *
- * <p>{@link #ack()} and {@link #fail()} are deliberately no-ops. Plain Aeron is a transport
- * with no persistence and no resumable position, so there is nothing to acknowledge and
- * nothing to redeliver. This is what makes the connector at-most-once.
+ * <p>In transport mode {@link #ack()} and {@link #fail()} are no-ops: plain Aeron has no
+ * persistence and no resumable position, so there is nothing to acknowledge and nothing to
+ * redeliver, which is what makes that mode at-most-once.
+ *
+ * <p>In archive mode they are not decoration. The framework queues a record via {@code consume()}
+ * and only publishes it later, so an acknowledgement is the sole evidence that a record reached
+ * Pulsar. Committing a replay position on anything earlier would checkpoint past records that were
+ * never published.
  */
 public class AeronRecord implements Record<byte[]> {
 
@@ -47,10 +52,23 @@ public class AeronRecord implements Record<byte[]> {
     /** Only present in archive mode. */
     public static final String PROP_RECORDING_ID = "aeron.recording-id";
 
+    /**
+     * Told whether the framework managed to publish a record.
+     *
+     * <p>Archive mode needs this: the framework publishes and acknowledges <em>after</em>
+     * {@code consume()} has queued the record, so only an acknowledgement proves a record is
+     * safely in Pulsar and its position safe to checkpoint.
+     */
+    interface Outcome {
+        void acked();
+
+        void failed();
+    }
+
     private final byte[] value;
     private final String key;
     private final Map<String, String> properties;
-    private final Long recordSequence;
+    private final Outcome outcome;
 
     /**
      * @param value      the reassembled payload; must already be a copy owned by this record
@@ -62,21 +80,14 @@ public class AeronRecord implements Record<byte[]> {
     }
 
     /**
-     * @param recordSequence the archive position, or null when reading the live transport. Plain
-     *                       Aeron has no position that survives a restart, so offering one there
-     *                       would imply a resumability the transport does not have.
+     * @param outcome notified when the framework publishes or fails this record, or null for the
+     *                live transport, where there is no position to commit and nothing to redeliver
      */
-    public AeronRecord(byte[] value, String key, Map<String, String> properties,
-                       Long recordSequence) {
+    AeronRecord(byte[] value, String key, Map<String, String> properties, Outcome outcome) {
         this.value = value;
         this.key = key;
         this.properties = Collections.unmodifiableMap(new HashMap<>(properties));
-        this.recordSequence = recordSequence;
-    }
-
-    @Override
-    public Optional<Long> getRecordSequence() {
-        return Optional.ofNullable(recordSequence);
+        this.outcome = outcome;
     }
 
     @Override
@@ -96,11 +107,18 @@ public class AeronRecord implements Record<byte[]> {
 
     @Override
     public void ack() {
-        // No-op: see class javadoc. Plain Aeron has nothing to acknowledge.
+        // Transport mode has nothing to acknowledge; archive mode commits its position here,
+        // which is the only point at which the record is known to be in Pulsar.
+        if (outcome != null) {
+            outcome.acked();
+        }
     }
 
     @Override
     public void fail() {
-        // No-op: see class javadoc. Plain Aeron cannot redeliver a message.
+        // Transport mode cannot redeliver. Archive mode must not checkpoint past this record.
+        if (outcome != null) {
+            outcome.failed();
+        }
     }
 }

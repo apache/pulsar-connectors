@@ -80,11 +80,26 @@ import org.slf4j.LoggerFactory;
  *
  * <h2>Delivery semantics: at-least-once</h2>
  *
- * <p>The checkpoint is written after records are handed downstream, so a crash in between replays
- * that window on restart. Duplicates are therefore possible and are not deduplicated here.
- * Effectively-once is available on top by enabling broker deduplication on the destination topic —
- * every record carries its archive position as {@link Record#getRecordSequence()} — but that
- * depends on user-side configuration, so it is not promised.
+ * <p>Two cursors are tracked, and the distinction is the whole guarantee. The <b>replay cursor</b>
+ * is how far the loop has read. The <b>commit watermark</b>, maintained by {@link CommitTracker},
+ * is the highest position whose record — and every record before it — the framework has
+ * acknowledged, meaning it actually reached Pulsar. <b>Only the watermark is checkpointed.</b>
+ *
+ * <p>This matters because {@code consume()} merely queues a record; the framework publishes and
+ * acknowledges later. Checkpointing the replay cursor would commit positions for records still
+ * sitting in memory, and a crash in that window would resume past records that were never
+ * published — silent loss in the mode meant to prevent exactly that.
+ *
+ * <p>A crash between publish and checkpoint replays the window since the last checkpoint, so
+ * duplicates are possible; {@code checkpointEveryRecords} bounds it. A record the framework
+ * <em>fails</em> stalls the watermark rather than being stepped over, so a restart replays it.
+ *
+ * <p><b>No record sequence is set.</b> An earlier revision exposed the archive position as
+ * {@link Record#getRecordSequence()} so broker deduplication could give effectively-once, but
+ * archive positions restart with each recording. After a rotation the same producer would emit
+ * <em>decreasing</em> sequence ids, and Pulsar's deduplication would then discard the new
+ * recording as already-seen — turning an optional optimisation into active message loss. Doing
+ * this safely needs a sequence that is monotonic across rotation, which is follow-up work.
  */
 public class ArchivePollingRunner implements AeronPoller {
 
@@ -107,6 +122,7 @@ public class ArchivePollingRunner implements AeronPoller {
     private final SourceContext sourceContext;
     private final ArchiveCheckpoint checkpoint;
     private final IdleStrategy idleStrategy;
+    private CommitTracker commitTracker;
 
     /** Mutable replay cursor, advanced by the fragment handler. */
     private long currentRecordingId;
@@ -137,6 +153,7 @@ public class ArchivePollingRunner implements AeronPoller {
 
         checkpoint.requireAvailable();
         resumeOrStart();
+        this.commitTracker = new CommitTracker(currentPosition);
     }
 
     /**
@@ -172,7 +189,10 @@ public class ArchivePollingRunner implements AeronPoller {
         currentRecordingId = config.getRecordingId() >= 0
                 ? config.getRecordingId()
                 : discoverRecording(Aeron.NULL_VALUE);
-        currentPosition = config.getStartPosition() >= 0 ? config.getStartPosition() : 0L;
+        // Default to where the recording actually begins rather than assuming zero.
+        currentPosition = config.getStartPosition() >= 0
+                ? config.getStartPosition()
+                : recordingStartPosition(currentRecordingId);
         LOG.info("No checkpoint found; starting Aeron archive replay at recordingId={} position={}",
                 currentRecordingId, currentPosition);
     }
@@ -191,15 +211,18 @@ public class ArchivePollingRunner implements AeronPoller {
      */
     private long discoverRecording(long after) {
         final MutableLong best = new MutableLong(Aeron.NULL_VALUE);
+        final MutableLong highestSeen = new MutableLong(Aeron.NULL_VALUE);
         long from = 0;
         int matched;
         do {
+            highestSeen.set(Aeron.NULL_VALUE);
             matched = archive.listRecordingsForUri(from, LIST_PAGE_SIZE,
                     config.getChannel(), config.getStreamId(),
                     (controlSessionId, correlationId, recordingId, startTimestamp, stopTimestamp,
                      startPosition, stopPosition, initialTermId, segmentFileLength,
                      termBufferLength, mtuLength, sessionId, streamId, strippedChannel,
                      originalChannel, sourceIdentity) -> {
+                        highestSeen.set(Math.max(highestSeen.get(), recordingId));
                         if (after == Aeron.NULL_VALUE) {
                             if (recordingId > best.get()) {
                                 best.set(recordingId);
@@ -209,7 +232,12 @@ public class ArchivePollingRunner implements AeronPoller {
                             best.set(recordingId);
                         }
                     });
-            from += matched;
+            // The first argument is an inclusive recording ID, not an offset. Advancing it by the
+            // match count re-reads the same page whenever matching IDs have gaps, which loops
+            // forever; step past the highest ID this page actually returned instead.
+            if (matched > 0 && highestSeen.get() != Aeron.NULL_VALUE) {
+                from = highestSeen.get() + 1;
+            }
         } while (matched == LIST_PAGE_SIZE);
 
         if (best.get() == Aeron.NULL_VALUE && after == Aeron.NULL_VALUE) {
@@ -219,6 +247,22 @@ public class ArchivePollingRunner implements AeronPoller {
                             + ". Set recordingId explicitly, or check the archive is recording it");
         }
         return best.get();
+    }
+
+    /**
+     * Where the given recording actually begins.
+     *
+     * <p>Not necessarily zero: Aeron supports recordings with a non-zero start position, and
+     * asking {@code replay()} to start before one fails asynchronously rather than at the call.
+     */
+    private long recordingStartPosition(long recordingId) {
+        final MutableLong start = new MutableLong(0L);
+        archive.listRecording(recordingId,
+                (controlSessionId, correlationId, id, startTimestamp, stopTimestamp,
+                 startPosition, stopPosition, initialTermId, segmentFileLength, termBufferLength,
+                 mtuLength, sessionId, streamId, strippedChannel, originalChannel,
+                 sourceIdentity) -> start.set(startPosition));
+        return start.get();
     }
 
     /**
@@ -254,6 +298,12 @@ public class ArchivePollingRunner implements AeronPoller {
             if (running) {
                 LOG.error("Aeron archive replay terminated unexpectedly at recordingId={} "
                         + "position={}", currentRecordingId, currentPosition, t);
+                // Without this the thread dies while AeronSource stays open and read() blocks
+                // forever, so a dead connector reports itself healthy. Telling the runtime lets it
+                // restart the instance, which resumes from the checkpoint.
+                if (sourceContext != null) {
+                    sourceContext.fatal(t);
+                }
             }
         } finally {
             // Best effort: a checkpoint here shrinks the replay window on a clean restart.
@@ -332,8 +382,10 @@ public class ArchivePollingRunner implements AeronPoller {
         LOG.info("Recording {} complete at {}; advancing to recording {}",
                 currentRecordingId, stop, next);
         currentRecordingId = next;
-        // Positions restart per recording, so the cursor must too.
-        currentPosition = 0L;
+        // Positions restart per recording — but not necessarily at zero, so ask the successor
+        // where it begins rather than assuming.
+        currentPosition = recordingStartPosition(next);
+        commitTracker.reset(currentPosition);
         recordsSinceCheckpoint = 0;
         writeCheckpoint();
         recordMetric(METRIC_RECORDINGS_ADVANCED, 1);
@@ -357,25 +409,42 @@ public class ArchivePollingRunner implements AeronPoller {
         properties.put(AeronRecord.PROP_RECORDING_ID, Long.toString(currentRecordingId));
 
         final String key = config.isKeyBySessionId() ? Integer.toString(header.sessionId()) : null;
+        final long position = header.position();
 
-        // Positions are monotonic within a recording, which is what broker deduplication needs.
-        consumer.accept(new AeronRecord(payload, key, properties, header.position()));
+        // Registered before handing the record over: an acknowledgement can land on a framework
+        // thread the instant consume() returns, and the tracker must already know about it.
+        commitTracker.emitted(position);
+        consumer.accept(new AeronRecord(payload, key, properties, new AeronRecord.Outcome() {
+            @Override
+            public void acked() {
+                commitTracker.acked(position);
+            }
+
+            @Override
+            public void failed() {
+                commitTracker.failed(position);
+            }
+        }));
         recordMetric(METRIC_RECORDS_CONSUMED, 1);
 
-        // The cursor advances only after the record is downstream, so a crash re-replays it rather
-        // than skipping it. That is the at-least-once side of the trade.
-        currentPosition = header.position();
+        // The replay cursor advances here so the loop knows how far it has read. What gets
+        // *checkpointed* is the commit watermark, which only moves on acknowledgement.
+        currentPosition = position;
         if (++recordsSinceCheckpoint >= config.getCheckpointEveryRecords()) {
             writeCheckpoint();
         }
     }
 
     private void writeCheckpoint() {
-        if (recordsSinceCheckpoint == 0 && currentPosition == 0) {
+        // The committed watermark, never the replay cursor: positions between the two belong to
+        // records that are queued but not yet published, and committing those would resume past
+        // data that never reached Pulsar.
+        if (!commitTracker.hasCommitted()) {
             return;
         }
+        final long committed = commitTracker.committedPosition();
         try {
-            checkpoint.write(currentRecordingId, currentPosition);
+            checkpoint.write(currentRecordingId, committed);
             recordsSinceCheckpoint = 0;
             recordMetric(METRIC_CHECKPOINTS_WRITTEN, 1);
         } catch (Exception e) {
@@ -383,7 +452,7 @@ public class ArchivePollingRunner implements AeronPoller {
             // source — but say so loudly, because a persistently failing store means every restart
             // re-ingests from the last good position.
             LOG.warn("Failed to write Aeron archive checkpoint at recordingId={} position={}",
-                    currentRecordingId, currentPosition, e);
+                    currentRecordingId, committed, e);
         }
     }
 

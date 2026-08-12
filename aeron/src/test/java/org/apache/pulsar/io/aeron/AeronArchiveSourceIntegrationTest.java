@@ -84,6 +84,8 @@ public class AeronArchiveSourceIntegrationTest {
     private SourceContext sourceContext;
     /** Stands in for the function state store; a bare mock would swallow checkpoints. */
     private Map<String, ByteBuffer> state;
+    /** Lets a test withhold acknowledgements to model records stuck mid-publish. */
+    private volatile boolean ackRecords = true;
     private String controlRequestChannel;
     private String controlResponseChannel;
 
@@ -94,6 +96,7 @@ public class AeronArchiveSourceIntegrationTest {
         Files.createDirectories(parent);
         rootDir = Files.createTempDirectory(parent, "aeron-archive-it-");
         collected = new CopyOnWriteArrayList<>();
+        ackRecords = true;
         state = new ConcurrentHashMap<>();
         sourceContext = mock(SourceContext.class);
         // Real read/write semantics, so checkpointing and resume are genuinely exercised rather
@@ -106,6 +109,12 @@ public class AeronArchiveSourceIntegrationTest {
             ByteBuffer stored = state.get(inv.<String>getArgument(0));
             return stored == null ? null : stored.duplicate();
         });
+        // deleteState was previously left as Mockito's no-op, which made every reset test
+        // vacuous: they would have passed even if clear() deleted nothing at all.
+        doAnswer(inv -> {
+            state.remove(inv.<String>getArgument(0));
+            return null;
+        }).when(sourceContext).deleteState(anyString());
 
         // Ports are picked from the ephemeral range so parallel test JVMs do not collide on a
         // fixed archive control port.
@@ -279,7 +288,16 @@ public class AeronArchiveSourceIntegrationTest {
         readerThread = new Thread(() -> {
             try {
                 while (!Thread.currentThread().isInterrupted()) {
-                    collected.add(source.read());
+                    Record<byte[]> record = source.read();
+                    collected.add(record);
+                    // The framework acknowledges after a successful publish, and only an
+                    // acknowledgement advances the commit watermark. A reader that collected
+                    // without acking modelled a world where publishing always succeeds
+                    // instantly — which is precisely why the earlier revision's checkpointing
+                    // bug was invisible to these tests.
+                    if (ackRecords) {
+                        record.ack();
+                    }
                 }
             } catch (Exception e) {
                 // Interrupted at teardown.
@@ -319,19 +337,25 @@ public class AeronArchiveSourceIntegrationTest {
     }
 
     @Test
-    public void testRecordsCarryTheArchivePositionAsRecordSequence() throws Exception {
+    public void testNoRecordSequenceIsExposed() throws Exception {
         recordMessages(List.of("alpha", "beta", "gamma"));
 
         startSource(archiveConfig());
         awaitRecords(3);
 
-        // Monotonic positions are what broker deduplication needs to discard replays.
-        List<Long> sequences = collected.stream()
-                .map(r -> r.getRecordSequence().orElse(null))
+        // Deliberately absent. Archive positions restart with each recording, so after a rotation
+        // the same producer would emit decreasing sequence ids and Pulsar's deduplication would
+        // discard the new recording as already-seen — turning an optional optimisation into active
+        // message loss. A sequence monotonic across rotation is follow-up work.
+        assertThat(collected).allSatisfy(r ->
+                assertThat(r.getRecordSequence()).isEmpty());
+
+        // The position is still available as metadata; only the dedup affordance is withheld.
+        List<Long> positions = collected.stream()
+                .map(r -> Long.parseLong(r.getProperties().get(AeronRecord.PROP_POSITION)))
                 .collect(Collectors.toList());
-        assertThat(sequences).doesNotContainNull();
-        assertThat(sequences).isSorted();
-        assertThat(sequences.get(sequences.size() - 1)).isGreaterThan(sequences.get(0));
+        assertThat(positions).isSorted();
+        assertThat(positions.get(positions.size() - 1)).isGreaterThan(positions.get(0));
     }
 
     @Test
@@ -368,7 +392,8 @@ public class AeronArchiveSourceIntegrationTest {
         // Replay everything once to learn where the first message ended.
         startSource(archiveConfig());
         awaitRecords(3);
-        final long afterFirst = collected.get(0).getRecordSequence().orElseThrow();
+        final long afterFirst =
+                Long.parseLong(collected.get(0).getProperties().get(AeronRecord.PROP_POSITION));
 
         readerThread.interrupt();
         readerThread = null;
@@ -538,6 +563,114 @@ public class AeronArchiveSourceIntegrationTest {
         ByteBuffer stored = state.values().iterator().next().duplicate();
         stored.getLong();
         assertThat(stored.getLong()).as("checkpoint rewritten by the reset run").isPositive();
+    }
+
+    @Test
+    public void testUnacknowledgedRecordsAreNotCheckpointed() throws Exception {
+        // The regression test for the defect this design exists to prevent. consume() only queues
+        // a record; the framework publishes and acks later. If the checkpoint tracked the replay
+        // cursor instead of the acknowledged watermark, a crash here would resume PAST records
+        // that never reached Pulsar.
+        ackRecords = false;
+        recordMessages(List.of("un-acked-1", "un-acked-2", "un-acked-3"));
+
+        Map<String, Object> config = archiveConfig();
+        config.put("checkpointEveryRecords", 1);
+        startSource(config);
+        awaitRecords(3);
+
+        // Read and delivered, but never acknowledged — so nothing may be committed.
+        Thread.sleep(2000);
+        assertThat(state)
+                .as("no checkpoint may exist while every record is still unacknowledged")
+                .isEmpty();
+    }
+
+    @Test
+    public void testCheckpointOnlyAdvancesOverTheAcknowledgedPrefix() throws Exception {
+        recordMessages(List.of("a", "b", "c"));
+
+        Map<String, Object> config = archiveConfig();
+        config.put("checkpointEveryRecords", 1);
+        startSource(config);
+        awaitRecords(3);
+
+        // With every record acked, the watermark reaches the last position, so a restart has
+        // nothing left to replay.
+        Awaitility.await("checkpoint written")
+                .atMost(TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                .until(() -> !state.isEmpty());
+
+        readerThread.interrupt();
+        readerThread = null;
+        source.close();
+        source = null;
+        collected.clear();
+
+        startSource(config);
+        Thread.sleep(3000);
+        assertThat(collected).as("everything was acknowledged, so nothing should replay").isEmpty();
+    }
+
+    @Test
+    public void testResetFailsLoudlyWhenTheCheckpointCannotBeDeleted() throws Exception {
+        recordMessages(List.of("x"));
+        Map<String, Object> config = archiveConfig();
+        config.put("checkpointEveryRecords", 1);
+        startSource(config);
+        awaitRecords(1);
+        Awaitility.await("checkpoint written")
+                .atMost(TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                .until(() -> !state.isEmpty());
+
+        readerThread.interrupt();
+        readerThread = null;
+        source.close();
+        source = null;
+
+        // A state store that accepts the delete but does not actually remove anything: silently
+        // continuing would resume from the old position while reporting a reset.
+        doAnswer(inv -> null).when(sourceContext).deleteState(anyString());
+
+        config.put("resetCheckpoint", true);
+        AeronSource bad = new AeronSource();
+        try {
+            bad.open(config, sourceContext);
+            fail("Expected open() to fail when the checkpoint could not be deleted");
+        } catch (Exception e) {
+            assertThat(e).isInstanceOf(IllegalStateException.class);
+            assertThat(e).hasMessageContaining("could not be deleted");
+        } finally {
+            closeQuietly(bad);
+        }
+    }
+
+    @Test
+    public void testResetActuallyDeletesTheStoredCheckpoint() throws Exception {
+        // Guards the stub itself: with deleteState left as a Mockito no-op this passed vacuously.
+        recordMessages(List.of("p", "q"));
+        Map<String, Object> config = archiveConfig();
+        config.put("checkpointEveryRecords", 1);
+        startSource(config);
+        awaitRecords(2);
+        Awaitility.await("checkpoint written")
+                .atMost(TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                .until(() -> !state.isEmpty());
+
+        readerThread.interrupt();
+        readerThread = null;
+        source.close();
+        source = null;
+        collected.clear();
+
+        // Withhold acks so the reset run cannot immediately write a replacement checkpoint,
+        // leaving the deletion itself observable.
+        ackRecords = false;
+        config.put("resetCheckpoint", true);
+        startSource(config);
+        awaitRecords(2);
+
+        assertThat(state).as("the stored checkpoint must actually be gone").isEmpty();
     }
 
     @Test

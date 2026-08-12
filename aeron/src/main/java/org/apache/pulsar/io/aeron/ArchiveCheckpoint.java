@@ -98,11 +98,26 @@ final class ArchiveCheckpoint {
      * from wherever the reset run reached.
      */
     void clear() {
+        Exception deleteFailure = null;
         try {
             sourceContext.deleteState(key);
         } catch (Exception e) {
-            // Nothing to delete is the common case and not an error.
-            LOG.debug("Could not delete archive checkpoint under {}", key, e);
+            // Deleting an absent key can legitimately throw depending on the state
+            // implementation, so the exception alone does not mean the reset failed. Verify by
+            // reading instead of guessing.
+            deleteFailure = e;
+        }
+
+        if (read().isPresent()) {
+            throw new IllegalStateException(
+                    "resetCheckpoint was requested but the stored checkpoint under '" + key
+                            + "' could not be deleted. Continuing would resume from the old "
+                            + "position while reporting a reset, so the source is failing instead.",
+                    deleteFailure);
+        }
+        if (deleteFailure != null) {
+            LOG.debug("deleteState threw for {} but no checkpoint remains, so the reset succeeded",
+                    key, deleteFailure);
         }
     }
 
