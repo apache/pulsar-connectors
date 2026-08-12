@@ -110,11 +110,21 @@ public class AeronSinkContainerTest {
                 .serviceHttpUrl(pulsarContainer.getHttpServiceUrl())
                 .build();
 
+        // Bootstrap creates the "public" tenant and the "public/default" namespace
+        // asynchronously, and the container's wait strategy can return before either lands.
+        // Waiting on the tenant alone is not enough: the namespace is created after it, so a
+        // producer can still fail with "Namespace not found". Enabling the functions worker
+        // shifted the timing enough to make that visible in CI.
         Awaitility.await("public tenant created")
                 .atMost(60, TimeUnit.SECONDS)
                 .pollInterval(250, TimeUnit.MILLISECONDS)
                 .ignoreExceptions()
                 .until(() -> admin.tenants().getTenants().contains("public"));
+        Awaitility.await("public/default namespace created")
+                .atMost(60, TimeUnit.SECONDS)
+                .pollInterval(250, TimeUnit.MILLISECONDS)
+                .ignoreExceptions()
+                .until(() -> admin.namespaces().getNamespaces("public").contains("public/default"));
 
         topicName = "persistent://public/default/aggregates-" + System.nanoTime();
         producer = pulsarClient.newProducer(Schema.BYTES).topic(topicName).create();
