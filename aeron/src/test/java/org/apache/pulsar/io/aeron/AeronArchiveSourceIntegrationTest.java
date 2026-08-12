@@ -323,6 +323,21 @@ public class AeronArchiveSourceIntegrationTest {
         readerThread.start();
     }
 
+    /**
+     * Waits for a checkpoint to appear.
+     *
+     * <p>Never assert this directly: {@link #awaitRecords} returns once records are <em>collected</em>,
+     * but the reader acknowledges after collecting and the checkpoint is written after that, on the
+     * poller thread. Asserting immediately races that chain and fails on slower machines — which is
+     * exactly how this first showed up in CI while passing locally.
+     */
+    private void awaitCheckpoint(String because) {
+        Awaitility.await(because)
+                .atMost(TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                .pollInterval(100, TimeUnit.MILLISECONDS)
+                .until(() -> !state.isEmpty());
+    }
+
     private void awaitRecords(int count) {
         Awaitility.await("source emitted " + count + " records")
                 .atMost(TIMEOUT_SECONDS, TimeUnit.SECONDS)
@@ -491,7 +506,7 @@ public class AeronArchiveSourceIntegrationTest {
         readerThread = null;
         source.close();
         source = null;
-        assertThat(state).as("a checkpoint should have been written").isNotEmpty();
+        awaitCheckpoint("a checkpoint should have been written");
         collected.clear();
 
         // More data arrives while the source is down — exactly the window transport mode loses.
@@ -516,7 +531,7 @@ public class AeronArchiveSourceIntegrationTest {
         awaitRecords(3);
 
         assertThat(valuesOf(collected)).containsExactly("a", "b", "c");
-        assertThat(state).as("running should have produced a checkpoint").isNotEmpty();
+        awaitCheckpoint("running should have produced a checkpoint");
     }
 
     @Test
@@ -552,7 +567,7 @@ public class AeronArchiveSourceIntegrationTest {
         readerThread = null;
         source.close();
         source = null;
-        assertThat(state).as("first run should have checkpointed").isNotEmpty();
+        awaitCheckpoint("first run should have checkpointed");
         collected.clear();
 
         // The escape hatch: reprocess history despite a checkpoint being present.
@@ -575,7 +590,7 @@ public class AeronArchiveSourceIntegrationTest {
 
         // Deleted, then rewritten as the run progresses — so removing the flag leaves a usable
         // checkpoint behind rather than a stale one from before the reset.
-        assertThat(state).isNotEmpty();
+        awaitCheckpoint("the reset run should rewrite a checkpoint");
         ByteBuffer stored = state.values().iterator().next().duplicate();
         stored.getLong();
         assertThat(stored.getLong()).as("checkpoint rewritten by the reset run").isPositive();
