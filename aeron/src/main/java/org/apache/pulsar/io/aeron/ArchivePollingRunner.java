@@ -128,6 +128,8 @@ public class ArchivePollingRunner implements AeronPoller {
     private long currentRecordingId;
     private long currentPosition;
     private long recordsSinceCheckpoint;
+    private long lastCheckpointedPosition = Long.MIN_VALUE;
+    private long lastCheckpointedRecording = Aeron.NULL_VALUE;
 
     private volatile boolean running = true;
 
@@ -288,11 +290,17 @@ public class ArchivePollingRunner implements AeronPoller {
 
                 if (bound > currentPosition) {
                     replayChunk(bound);
-                    writeCheckpoint();
                 } else if (!advanceRecordingIfFinished()) {
                     // Caught up on a recording that is still being written: wait for more.
                     idleStrategy.idle(0);
                 }
+
+                // Attempted on every pass, including idle ones. Acknowledgements arrive on
+                // framework threads, so the watermark can advance long after the last record was
+                // read — and once caught up there is no further chunk to trigger a write. Only
+                // checkpointing after a chunk left the committed position unpersisted until
+                // shutdown whenever the acks landed a moment too late.
+                writeCheckpointIfAdvanced();
             }
         } catch (Throwable t) {
             if (running) {
@@ -308,7 +316,7 @@ public class ArchivePollingRunner implements AeronPoller {
         } finally {
             // Best effort: a checkpoint here shrinks the replay window on a clean restart.
             try {
-                writeCheckpoint();
+                writeCheckpointIfAdvanced();
             } catch (Exception e) {
                 LOG.warn("Could not write a final archive checkpoint", e);
             }
@@ -387,7 +395,7 @@ public class ArchivePollingRunner implements AeronPoller {
         currentPosition = recordingStartPosition(next);
         commitTracker.reset(currentPosition);
         recordsSinceCheckpoint = 0;
-        writeCheckpoint();
+        writeCheckpointIfAdvanced();
         recordMetric(METRIC_RECORDINGS_ADVANCED, 1);
         return true;
     }
@@ -431,11 +439,12 @@ public class ArchivePollingRunner implements AeronPoller {
         // *checkpointed* is the commit watermark, which only moves on acknowledgement.
         currentPosition = position;
         if (++recordsSinceCheckpoint >= config.getCheckpointEveryRecords()) {
-            writeCheckpoint();
+            writeCheckpointIfAdvanced();
         }
     }
 
-    private void writeCheckpoint() {
+    /** Writes only when the watermark has actually moved, so idle passes stay cheap. */
+    private void writeCheckpointIfAdvanced() {
         // The committed watermark, never the replay cursor: positions between the two belong to
         // records that are queued but not yet published, and committing those would resume past
         // data that never reached Pulsar.
@@ -443,8 +452,13 @@ public class ArchivePollingRunner implements AeronPoller {
             return;
         }
         final long committed = commitTracker.committedPosition();
+        if (committed == lastCheckpointedPosition && currentRecordingId == lastCheckpointedRecording) {
+            return;
+        }
         try {
             checkpoint.write(currentRecordingId, committed);
+            lastCheckpointedPosition = committed;
+            lastCheckpointedRecording = currentRecordingId;
             recordsSinceCheckpoint = 0;
             recordMetric(METRIC_CHECKPOINTS_WRITTEN, 1);
         } catch (Exception e) {
