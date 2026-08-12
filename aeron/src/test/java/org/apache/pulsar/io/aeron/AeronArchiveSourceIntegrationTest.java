@@ -208,8 +208,17 @@ public class AeronArchiveSourceIntegrationTest {
 
     /** Records a publication and writes the given payloads into it, then stops recording. */
     private void recordMessages(List<String> payloads) {
+        recordMessages(payloads, CHANNEL);
+    }
+
+    /**
+     * @param publicationChannel lets a test pick a small term length, so terms roll over and Aeron
+     *                           inserts padding frames — which {@code poll()} skips without
+     *                           invoking the fragment handler
+     */
+    private void recordMessages(List<String> payloads, String publicationChannel) {
         archive.startRecording(CHANNEL, STREAM_ID, SourceLocation.LOCAL);
-        try (Publication publication = aeron.addPublication(CHANNEL, STREAM_ID)) {
+        try (Publication publication = aeron.addPublication(publicationChannel, STREAM_ID)) {
             Awaitility.await("publication connected to the archive recorder")
                     .atMost(TIMEOUT_SECONDS, TimeUnit.SECONDS)
                     .pollInterval(50, TimeUnit.MILLISECONDS)
@@ -761,6 +770,48 @@ public class AeronArchiveSourceIntegrationTest {
 
         // And nothing was committed, so a restart replays the failed record.
         assertThat(state).as("a failed record must not be checkpointed").isEmpty();
+    }
+
+    @Test
+    public void testAdvancesToTheNextRecordingWhenTheCurrentOneIsFinished() throws Exception {
+        // Rotation-following had no direct test at all until this one; it was implemented and
+        // shipped on reasoning alone.
+        //
+        // The small term length makes terms roll over, so padding frames occur mid-recording and
+        // the replay has to cross them. Note what this does NOT prove: padding in the middle of a
+        // recording is stepped over by the next fragment's header, so it cannot strand the replay
+        // cursor. Only padding at the very END of a recording can, and that needs recording to
+        // stop in the window between a padding frame being written and the message that follows
+        // it. This test was checked against a build with the cursor fix disabled and still passed,
+        // so the trailing-padding livelock remains reasoned rather than reproduced.
+        final String paddedChannel = CHANNEL + "?term-length=65536";
+        List<String> first = new ArrayList<>();
+        for (int i = 0; i < 30; i++) {
+            first.add("first-" + i + "-" + RandomStringUtils.insecure().nextAlphanumeric(6000));
+        }
+        recordMessages(first, paddedChannel);
+        // Discovery picks the NEWEST recording, so the start point has to be pinned to the first
+        // one — otherwise the source begins at the second and rotation is never exercised.
+        final long firstRecordingId = findRecordingId();
+
+        // A second recording, which the source can only reach if it got past the first.
+        List<String> second = List.of("second-a", "second-b");
+        recordMessages(second, paddedChannel);
+        assertThat(findRecordingId())
+                .as("the second batch must create a distinct recording")
+                .isGreaterThan(firstRecordingId);
+
+        Map<String, Object> config = archiveConfig();
+        config.put("recordingId", firstRecordingId);
+        startSource(config);
+        awaitRecords(first.size() + second.size());
+
+        List<String> values = valuesOf(collected);
+        assertThat(values).hasSize(first.size() + second.size());
+        assertThat(values.subList(0, first.size())).containsExactlyElementsOf(first);
+        assertThat(values.subList(first.size(), values.size()))
+                .as("the source must reach the second recording rather than spinning on the first")
+                .containsExactlyElementsOf(second);
     }
 
     @Test

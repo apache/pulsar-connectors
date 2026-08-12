@@ -20,6 +20,7 @@ package org.apache.pulsar.io.aeron;
 
 import io.aeron.Aeron;
 import io.aeron.FragmentAssembler;
+import io.aeron.Image;
 import io.aeron.Subscription;
 import io.aeron.archive.client.AeronArchive;
 import io.aeron.logbuffer.Header;
@@ -360,13 +361,18 @@ public class ArchivePollingRunner implements AeronPoller {
             // away — and they are only distinguishable by whether an image was ever seen. Getting
             // this wrong ends the chunk before it starts.
             boolean sawImage = false;
+            // Tracks what the replay image actually consumed, which is not the same as what was
+            // delivered: poll() advances over padding frames without calling the handler.
+            long imagePosition = currentPosition;
             final long connectDeadline =
                     System.nanoTime() + TimeUnit.SECONDS.toNanos(REPLAY_CONNECT_TIMEOUT_SECONDS);
 
             while (running) {
                 if (replay.imageCount() > 0) {
                     sawImage = true;
-                    if (replay.imageAtIndex(0).isEndOfStream()) {
+                    final Image image = replay.imageAtIndex(0);
+                    imagePosition = Math.max(imagePosition, image.position());
+                    if (image.isEndOfStream()) {
                         break;
                     }
                 } else if (sawImage) {
@@ -383,6 +389,16 @@ public class ArchivePollingRunner implements AeronPoller {
                     recordMetric(METRIC_FRAGMENTS_RECEIVED, fragments);
                 }
                 idleStrategy.idle(fragments);
+            }
+
+            // Advance the replay cursor over anything the image consumed but did not deliver.
+            // A range ending in padding delivers no fragment, so a cursor driven only by fragment
+            // headers would stay short of the bound and the outer loop would replay the same
+            // padding-only range forever, never rotating. Safe precisely because the cursor and
+            // the commit watermark are separate: this moves only what has been *read*, while the
+            // checkpoint still tracks what has been acknowledged.
+            if (imagePosition > currentPosition) {
+                currentPosition = imagePosition;
             }
         }
     }
