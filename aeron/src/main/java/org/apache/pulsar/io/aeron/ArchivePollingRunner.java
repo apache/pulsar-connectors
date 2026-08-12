@@ -102,11 +102,16 @@ import org.slf4j.LoggerFactory;
  *
  * <h2>One active recording at a time</h2>
  *
- * <p>Transport mode receives from every publication on a channel and stream. Archive mode cannot:
- * the archive records each session separately, so concurrent publishers produce concurrent
- * recordings and this replays one at a time. Rather than silently dropping the others, it fails at
- * {@code open()} when more than one is active. Give each publisher a distinct channel or stream,
- * or pin {@code recordingId} and run a source per recording.
+ * <p>Transport mode receives from every publication on a channel and stream. <b>Archive mode does
+ * not support concurrent publishers</b>: the archive records each session separately, so they
+ * produce concurrent recordings and this replays one at a time. Rather than silently dropping the
+ * others, it fails at {@code open()} when more than one is active.
+ *
+ * <p>The remedy is a distinct channel or stream id per publisher, or {@code mode: transport} where
+ * multi-publisher delivery works. Pinning {@code recordingId} and running a source per recording is
+ * <em>not</em> a workaround: the guard runs before the start position is resolved so it rejects
+ * pinned configurations too, and pinned runners auto-advance on rotation and would walk into each
+ * other's recordings.
  *
  * <p><b>No record sequence is set.</b> An earlier revision exposed the archive position as
  * {@link Record#getRecordSequence()} so broker deduplication could give effectively-once, but
@@ -229,13 +234,20 @@ public class ArchivePollingRunner implements AeronPoller {
         } while (matched == LIST_PAGE_SIZE);
 
         if (active.get() > 1) {
+            // Deliberately does NOT suggest pinning 'recordingId' and running a source per
+            // recording. This guard runs before the start position is resolved, so it rejects a
+            // pinned configuration too — and even if it did not, pinned runners auto-advance on
+            // rotation and would walk into each other's recordings. Suggesting a workaround that
+            // cannot work is worse than stating the limitation.
             throw new IllegalStateException(
                     "Archive mode found " + active.get() + " concurrently active recordings for "
                             + "channel '" + config.getChannel() + "' streamId "
-                            + config.getStreamId() + " (recordingIds: " + ids + "). It replays one "
-                            + "recording at a time, so the others would never be replayed. Use a "
-                            + "distinct channel or streamId per publisher, or set 'recordingId' "
-                            + "explicitly and run one source per recording.");
+                            + config.getStreamId() + " (recordingIds: " + ids + "). Concurrent "
+                            + "publishers on one channel and stream are not supported in archive "
+                            + "mode: the archive records each session separately and this replays "
+                            + "one recording at a time, so the others would never be replayed. "
+                            + "Give each publisher a distinct channel or streamId, or use "
+                            + "'mode: transport', which does receive from every publication.");
         }
     }
 

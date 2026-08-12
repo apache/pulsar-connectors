@@ -858,6 +858,12 @@ public class AeronArchiveSourceIntegrationTest {
             } catch (Exception e) {
                 assertThat(e).isInstanceOf(IllegalStateException.class);
                 assertThat(e).hasMessageContaining("concurrently active recordings");
+                assertThat(e).hasMessageContaining("not supported in archive mode");
+                // The message must not offer a workaround that cannot work: this guard runs
+                // before the start position is resolved, so a pinned recordingId is rejected too.
+                assertThat(e.getMessage())
+                        .as("must not suggest pinning recordingId, which this guard rejects anyway")
+                        .doesNotContain("set 'recordingId'");
             } finally {
                 closeQuietly(bad);
             }

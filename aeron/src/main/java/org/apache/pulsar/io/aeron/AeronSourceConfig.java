@@ -59,7 +59,12 @@ public class AeronSourceConfig implements Serializable {
                     + "at-most-once: nothing can be replayed, so messages published while the "
                     + "connector is down are lost. 'archive' replays from an Aeron Archive "
                     + "recording and can resume after a restart. The two have materially "
-                    + "different delivery guarantees, so the mode is explicit rather than a flag")
+                    + "different delivery guarantees, so the mode is explicit rather than a flag. "
+                    + "Note that 'archive' does NOT support concurrent publishers on one channel "
+                    + "and stream: the archive records each session separately and the source "
+                    + "replays one recording at a time, so it fails at startup if more than one "
+                    + "recording is active. Give each publisher a distinct channel or streamId, "
+                    + "or use 'transport', which does receive from every publication")
     private String mode = MODE_TRANSPORT;
 
     @FieldDoc(
