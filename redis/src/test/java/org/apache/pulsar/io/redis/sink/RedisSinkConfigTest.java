@@ -42,8 +42,10 @@ public class RedisSinkConfigTest {
         assertNotNull(config);
         assertEquals(config.getRedisHosts(), "localhost:6379");
         assertEquals(config.getRedisPassword(), "fake@123");
+        assertEquals(config.getRedisUser(), "fake-user");
         assertEquals(config.getRedisDatabase(), Integer.parseInt("1"));
         assertEquals(config.getClientMode(), "Standalone");
+        assertEquals(config.isRedisUseTls(), true);
         assertEquals(config.getOperationTimeout(), Long.parseLong("2000"));
         assertEquals(config.getBatchSize(), Integer.parseInt("100"));
         assertEquals(config.getBatchTimeMs(), Long.parseLong("1000"));
@@ -69,10 +71,52 @@ public class RedisSinkConfigTest {
         assertEquals(config.getRedisPassword(), "fake@123");
         assertEquals(config.getRedisDatabase(), Integer.parseInt("1"));
         assertEquals(config.getClientMode(), "Standalone");
+        assertEquals(config.isRedisUseTls(), false);
         assertEquals(config.getOperationTimeout(), Long.parseLong("2000"));
         assertEquals(config.getBatchSize(), Integer.parseInt("100"));
         assertEquals(config.getBatchTimeMs(), Long.parseLong("1000"));
         assertEquals(config.getConnectTimeout(), Long.parseLong("3000"));
+    }
+
+    @Test
+    public final void loadFromMapWithAclAndTlsTest() throws IOException {
+        Map<String, Object> map = new HashMap<String, Object>();
+        map.put("redisHosts", "localhost:6379");
+        map.put("redisUser", "fake-user");
+        map.put("redisPassword", "fake@123");
+        map.put("redisDatabase", "1");
+        map.put("clientMode", "Standalone");
+        map.put("redisUseTls", "true");
+        map.put("operationTimeout", "2000");
+        map.put("batchSize", "100");
+        map.put("batchTimeMs", "1000");
+        map.put("connectTimeout", "3000");
+
+        SinkContext sinkContext = Mockito.mock(SinkContext.class);
+        RedisSinkConfig config = RedisSinkConfig.load(map, sinkContext);
+        assertNotNull(config);
+        assertEquals(config.getRedisUser(), "fake-user");
+        assertEquals(config.getRedisPassword(), "fake@123");
+        assertEquals(config.isRedisUseTls(), true);
+        config.validate();
+    }
+
+    @Test(expectedExceptions = IllegalArgumentException.class,
+        expectedExceptionsMessageRegExp = "redisPassword must be set when redisUser is set.")
+    public final void redisUserWithoutPasswordFailsValidateTest() throws IOException {
+        Map<String, Object> map = new HashMap<String, Object>();
+        map.put("redisHosts", "localhost:6379");
+        map.put("redisUser", "fake-user");
+        map.put("redisDatabase", "1");
+        map.put("clientMode", "Standalone");
+        map.put("operationTimeout", "2000");
+        map.put("batchSize", "100");
+        map.put("batchTimeMs", "1000");
+        map.put("connectTimeout", "3000");
+
+        SinkContext sinkContext = Mockito.mock(SinkContext.class);
+        RedisSinkConfig config = RedisSinkConfig.load(map, sinkContext);
+        config.validate();
     }
 
     @Test

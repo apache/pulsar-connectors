@@ -51,10 +51,26 @@ public class RedisAbstractConfig implements Serializable {
     private String redisPassword;
 
     @FieldDoc(
+        required = false,
+        defaultValue = "",
+        sensitive = true,
+        help = "The username used for Redis 6+ ACL authentication. Requires redisPassword to also be set; "
+            + "if left blank, legacy password-only authentication is used instead")
+    private String redisUser;
+
+    @FieldDoc(
         required = true,
         defaultValue = "0",
         help = "The Redis database to connect to")
     private int redisDatabase = 0;
+
+    @FieldDoc(
+        required = false,
+        defaultValue = "false",
+        help = "Whether to enable TLS/SSL when connecting to Redis. Peer verification is always on and there is "
+            + "no way to configure a custom trust store, so only certificates trusted by the JVM's default "
+            + "trust store (e.g. public CA-signed certificates) are supported")
+    private boolean redisUseTls = false;
 
     @FieldDoc(
         required = false,
@@ -94,6 +110,8 @@ public class RedisAbstractConfig implements Serializable {
 
     public void validate() {
         Preconditions.checkNotNull(clientMode, "clientMode property not set.");
+        Preconditions.checkArgument(StringUtils.isBlank(redisUser) || !StringUtils.isBlank(redisPassword),
+            "redisPassword must be set when redisUser is set.");
     }
 
     public enum ClientMode {
