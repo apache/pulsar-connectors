@@ -26,6 +26,8 @@ import io.lettuce.core.ClientOptions;
 import io.lettuce.core.RedisClient;
 import io.lettuce.core.RedisURI;
 import io.lettuce.core.SocketOptions;
+import io.lettuce.core.SslOptions;
+import io.lettuce.core.SslVerifyMode;
 import io.lettuce.core.api.StatefulConnection;
 import io.lettuce.core.api.StatefulRedisConnection;
 import io.lettuce.core.cluster.ClusterClientOptions;
@@ -34,6 +36,7 @@ import io.lettuce.core.cluster.api.StatefulRedisClusterConnection;
 import io.lettuce.core.cluster.api.async.RedisClusterAsyncCommands;
 import io.lettuce.core.codec.ByteArrayCodec;
 import io.lettuce.core.codec.RedisCodec;
+import java.io.File;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
@@ -94,10 +97,12 @@ public class RedisSession {
         }
 
         List<RedisURI> redisURIs = redisURIs(config.getHostAndPorts(), config);
+        final SslOptions sslOptions = buildSslOptions(config);
 
         if (clientMode == ClientMode.STANDALONE) {
             ClientOptions.Builder clientOptions = ClientOptions.builder()
                 .socketOptions(socketOptions)
+                .sslOptions(sslOptions)
                 .requestQueueSize(config.getRequestQueue())
                 .autoReconnect(config.isAutoReconnect());
 
@@ -107,6 +112,7 @@ public class RedisSession {
             redisSession = new RedisSession(client, connection, connection.async());
         } else if (clientMode == ClientMode.CLUSTER) {
             ClusterClientOptions.Builder clientOptions = ClusterClientOptions.builder()
+                .sslOptions(sslOptions)
                 .requestQueueSize(config.getRequestQueue())
                 .autoReconnect(config.isAutoReconnect());
 
@@ -133,6 +139,9 @@ public class RedisSession {
             builder.withPort(hostAndPort.getPort());
             builder.withDatabase(config.getRedisDatabase());
             builder.withSsl(config.isRedisUseTls());
+            if (config.isRedisUseTls()) {
+                builder.withVerifyPeer(parseVerifyMode(config.getRedisTlsVerifyPeer()));
+            }
             if (!StringUtils.isBlank(config.getRedisUser()) && !StringUtils.isBlank(config.getRedisPassword())) {
                 builder.withAuthentication(config.getRedisUser(), config.getRedisPassword());
             } else if (!StringUtils.isBlank(config.getRedisPassword())) {
@@ -142,5 +151,29 @@ public class RedisSession {
             redisURIs.add(builder.build());
         }
         return redisURIs;
+    }
+
+    private static SslVerifyMode parseVerifyMode(String value) {
+        try {
+            return SslVerifyMode.valueOf(value.toUpperCase());
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("Illegal Redis TLS verify-peer mode, valid values are: "
+                + Arrays.asList(SslVerifyMode.values()));
+        }
+    }
+
+    @VisibleForTesting
+    static SslOptions buildSslOptions(RedisAbstractConfig config) {
+        if (!config.isRedisUseTls() || StringUtils.isBlank(config.getRedisTlsTrustStorePath())) {
+            return SslOptions.create();
+        }
+        File truststore = new File(config.getRedisTlsTrustStorePath());
+        SslOptions.Builder builder = SslOptions.builder();
+        if (StringUtils.isBlank(config.getRedisTlsTrustStorePassword())) {
+            builder.truststore(truststore);
+        } else {
+            builder.truststore(truststore, config.getRedisTlsTrustStorePassword());
+        }
+        return builder.build();
     }
 }

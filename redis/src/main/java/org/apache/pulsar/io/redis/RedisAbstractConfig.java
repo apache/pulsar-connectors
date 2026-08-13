@@ -67,10 +67,31 @@ public class RedisAbstractConfig implements Serializable {
     @FieldDoc(
         required = false,
         defaultValue = "false",
-        help = "Whether to enable TLS/SSL when connecting to Redis. Peer verification is always on and there is "
-            + "no way to configure a custom trust store, so only certificates trusted by the JVM's default "
-            + "trust store (e.g. public CA-signed certificates) are supported")
+        help = "Whether to enable TLS/SSL when connecting to Redis")
     private boolean redisUseTls = false;
+
+    @FieldDoc(
+        required = false,
+        defaultValue = "FULL",
+        help = "TLS peer verification mode to use when redisUseTls is enabled. Possible values "
+            + "[FULL, CA, NONE]. FULL verifies the server's certificate chain and hostname, CA verifies only "
+            + "the certificate chain, and NONE disables verification entirely and should not be used in "
+            + "production")
+    private String redisTlsVerifyPeer = "FULL";
+
+    @FieldDoc(
+        required = false,
+        defaultValue = "",
+        help = "Filesystem path to a trust store (e.g. JKS or PKCS12) used to validate the Redis server's TLS "
+            + "certificate when redisUseTls is enabled. If left blank, the JVM's default trust store is used")
+    private String redisTlsTrustStorePath;
+
+    @FieldDoc(
+        required = false,
+        defaultValue = "",
+        sensitive = true,
+        help = "The password for the trust store configured via redisTlsTrustStorePath")
+    private String redisTlsTrustStorePassword;
 
     @FieldDoc(
         required = false,
@@ -110,6 +131,7 @@ public class RedisAbstractConfig implements Serializable {
 
     public void validate() {
         Preconditions.checkNotNull(clientMode, "clientMode property not set.");
+        Preconditions.checkArgument(redisTlsVerifyPeer != null, "redisTlsVerifyPeer property not set.");
         Preconditions.checkArgument(StringUtils.isBlank(redisUser) || !StringUtils.isBlank(redisPassword),
             "redisPassword must be set when redisUser is set.");
     }
