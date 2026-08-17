@@ -19,18 +19,24 @@
 
 plugins {
     id("pulsar-connectors.java-conventions")
-    id("pulsar-connectors.nar-conventions")
 }
 dependencies {
-    // CassandraSinkConfig and the table-mapping sinks live in :cassandra-core so that the NAR modules
-    // for the other two connectors can depend on them; see that module's build file for why it is not
-    // a NAR itself.
-    implementation(project(":cassandra-core"))
-    implementation(libs.pulsar.io.core)
-    implementation(libs.pulsar.io.common)
+    // Deliberately not a NAR module. nar-conventions disables the jar task and replaces this
+    // project's outgoing artifacts with the NAR itself, so a NAR module cannot be depended on — the
+    // consumer would bundle a .nar inside META-INF/bundled-dependencies where the classloader cannot
+    // reach the classes. The shared sink machinery therefore lives here, in a plain jar that the
+    // `cassandra`, `cassandra-generic-record` and `cassandra-json` NARs each depend on. This mirrors
+    // jdbc/core and its per-database NAR modules.
+    api(libs.pulsar.io.core)
+    api(libs.pulsar.io.common)
+    api(libs.pulsar.client.api)
+    api(libs.cassandra.driver)
     implementation(libs.jackson.databind)
     implementation(libs.jackson.dataformat.yaml)
-    implementation(libs.cassandra.driver)
+    implementation(libs.commons.beanutils)
 
     testImplementation(libs.testcontainers.cassandra)
+    // Test only: builds the Avro-backed GenericRecord that CassandraGenericRecordSink consumes, the
+    // same way the hbase and jdbc sink tests do.
+    testImplementation(libs.pulsar.client)
 }
