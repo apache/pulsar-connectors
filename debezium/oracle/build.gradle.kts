@@ -25,4 +25,8 @@ dependencies {
     implementation(libs.pulsar.io.core)
     implementation(project(":debezium:pulsar-io-debezium-core"))
     implementation(libs.debezium.connector.oracle)
+
+    testImplementation(libs.testcontainers)
+    testImplementation(libs.testcontainers.pulsar)
+    testImplementation(libs.pulsar.client)
 }
