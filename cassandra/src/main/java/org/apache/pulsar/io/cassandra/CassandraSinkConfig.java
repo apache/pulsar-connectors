@@ -35,6 +35,20 @@ public class CassandraSinkConfig implements Serializable {
     private static final long serialVersionUID = 1L;
 
     @FieldDoc(
+        required = false,
+        defaultValue = "",
+        sensitive = true,
+        help = "Username used to authenticate against the cluster specified by `roots`. "
+                + "Leave unset for a cluster that does not require authentication.")
+    private String userName;
+    @FieldDoc(
+        required = false,
+        defaultValue = "",
+        sensitive = true,
+        help = "Password used to authenticate against the cluster specified by `roots`. "
+                + "Leave unset for a cluster that does not require authentication.")
+    private String password;
+    @FieldDoc(
         required = true,
         defaultValue = "",
         help = "A comma-separated list of cassandra hosts to connect to")

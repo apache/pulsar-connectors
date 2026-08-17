@@ -29,6 +29,7 @@ import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.MoreExecutors;
 import java.util.Map;
 import org.apache.pulsar.functions.api.Record;
+import org.apache.pulsar.io.common.IOConfigUtils;
 import org.apache.pulsar.io.core.KeyValue;
 import org.apache.pulsar.io.core.Sink;
 import org.apache.pulsar.io.core.SinkContext;
@@ -47,7 +48,10 @@ public abstract class CassandraAbstractSink<K, V> implements Sink<byte[]> {
 
     @Override
     public void open(Map<String, Object> config, SinkContext sinkContext) throws Exception {
-        cassandraSinkConfig = CassandraSinkConfig.load(config);
+        // loadWithSecrets rather than load(): it resolves @FieldDoc(sensitive = true) fields from the
+        // connector's secrets provider, so the password need not sit in plaintext config. Fields with
+        // no secret configured still come from the config map, as before.
+        cassandraSinkConfig = IOConfigUtils.loadWithSecrets(config, CassandraSinkConfig.class, sinkContext);
         if (cassandraSinkConfig.getRoots() == null
                 || cassandraSinkConfig.getKeyspace() == null
                 || cassandraSinkConfig.getKeyname() == null
@@ -98,10 +102,20 @@ public abstract class CassandraAbstractSink<K, V> implements Sink<byte[]> {
                 b.withPort(Integer.parseInt(hostPort[1]));
             }
         }
+        // Authenticate only when credentials were supplied; an unset pair leaves the connection
+        // exactly as it was before these settings existed.
+        if (hasText(cassandraSinkConfig.getUserName())
+                && hasText(cassandraSinkConfig.getPassword())) {
+            b.withCredentials(cassandraSinkConfig.getUserName(), cassandraSinkConfig.getPassword());
+        }
         cluster = b.withoutJMXReporting().build();
         session = cluster.connect();
         session.execute("USE " + cassandraSinkConfig.getKeyspace());
     }
 
     public abstract KeyValue<K, V> extractKeyValue(Record<byte[]> record);
+
+    private static boolean hasText(String value) {
+        return value != null && !value.trim().isEmpty();
+    }
 }

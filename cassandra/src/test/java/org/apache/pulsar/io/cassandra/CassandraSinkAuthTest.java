@@ -1,0 +1,165 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+package org.apache.pulsar.io.cassandra;
+
+import static org.mockito.Mockito.mock;
+import static org.testng.Assert.assertEquals;
+import static org.testng.Assert.assertNull;
+import com.datastax.driver.core.Cluster;
+import com.datastax.driver.core.Session;
+import java.time.Duration;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+import org.apache.pulsar.functions.api.Record;
+import org.apache.pulsar.io.core.SinkContext;
+import org.testcontainers.containers.CassandraContainer;
+import org.testng.annotations.AfterClass;
+import org.testng.annotations.BeforeClass;
+import org.testng.annotations.Test;
+
+/**
+ * Covers the {@code userName} / {@code password} settings on {@link CassandraSinkConfig}.
+ *
+ * <p>Scope, stated plainly: these assert that credentials are carried through config loading and
+ * that supplying them still yields a working connection and write. They do <em>not</em> assert that
+ * the server rejects a connection without them — the Cassandra test container runs with the default
+ * {@code AllowAllAuthenticator}, and switching it to {@code PasswordAuthenticator} needs a full
+ * version-specific {@code cassandra.yaml} override. Enforcement is the server's behaviour; what is
+ * this connector's to get right is that the credentials reach the driver, and that an unset pair
+ * leaves the connection exactly as it was.
+ */
+public class CassandraSinkAuthTest {
+
+    private static final String KEYSPACE = "auth_test_ks";
+    private static final String TABLE = "auth_test_table";
+    private static final String KEY_COLUMN = "key";
+    private static final String VALUE_COLUMN = "value";
+
+    private CassandraContainer<?> cassandraContainer;
+
+    @BeforeClass
+    public void setUp() {
+        cassandraContainer = new CassandraContainer<>("cassandra:4.1")
+                .withStartupTimeout(Duration.ofMinutes(3));
+        cassandraContainer.start();
+
+        try (Cluster cluster = cassandraContainer.getCluster();
+             Session session = cluster.connect()) {
+            session.execute("CREATE KEYSPACE " + KEYSPACE
+                    + " WITH replication = {'class':'SimpleStrategy', 'replication_factor':'1'}");
+            session.execute("CREATE TABLE " + KEYSPACE + "." + TABLE
+                    + " (" + KEY_COLUMN + " text PRIMARY KEY, " + VALUE_COLUMN + " text)");
+        }
+    }
+
+    @AfterClass(alwaysRun = true)
+    public void tearDown() {
+        if (cassandraContainer != null) {
+            cassandraContainer.stop();
+            cassandraContainer = null;
+        }
+    }
+
+    @Test
+    public void credentialsSurviveConfigLoading() throws Exception {
+        Map<String, Object> config = baseConfig();
+        config.put("userName", "cassandra");
+        config.put("password", "cassandra");
+
+        CassandraSinkConfig loaded = CassandraSinkConfig.load(config);
+
+        assertEquals(loaded.getUserName(), "cassandra");
+        assertEquals(loaded.getPassword(), "cassandra");
+    }
+
+    @Test
+    public void credentialsAreUnsetWhenNotConfigured() throws Exception {
+        CassandraSinkConfig loaded = CassandraSinkConfig.load(baseConfig());
+
+        assertNull(loaded.getUserName());
+        assertNull(loaded.getPassword());
+    }
+
+    @Test
+    public void sinkWritesWithCredentialsSupplied() throws Exception {
+        Map<String, Object> config = baseConfig();
+        config.put("userName", cassandraContainer.getUsername());
+        config.put("password", cassandraContainer.getPassword());
+
+        assertWriteSucceeds(config, "with-credentials");
+    }
+
+    @Test
+    public void sinkWritesWithoutCredentials() throws Exception {
+        assertWriteSucceeds(baseConfig(), "no-credentials");
+    }
+
+    private void assertWriteSucceeds(Map<String, Object> config, String key) throws Exception {
+        CassandraStringSink sink = new CassandraStringSink();
+        try {
+            sink.open(config, mock(SinkContext.class));
+
+            CompletableFuture<Void> acked = new CompletableFuture<>();
+            sink.write(new Record<byte[]>() {
+                @Override
+                public Optional<String> getKey() {
+                    return Optional.of(key);
+                }
+
+                @Override
+                public byte[] getValue() {
+                    return ("value-" + key).getBytes();
+                }
+
+                @Override
+                public void ack() {
+                    acked.complete(null);
+                }
+
+                @Override
+                public void fail() {
+                    acked.completeExceptionally(new RuntimeException("Record failed"));
+                }
+            });
+            acked.get();
+        } finally {
+            sink.close();
+        }
+
+        try (Cluster cluster = cassandraContainer.getCluster();
+             Session session = cluster.connect(KEYSPACE)) {
+            assertEquals(session
+                    .execute("SELECT * FROM " + TABLE + " WHERE " + KEY_COLUMN + " = '" + key + "'")
+                    .one()
+                    .getString(VALUE_COLUMN), "value-" + key);
+        }
+    }
+
+    private Map<String, Object> baseConfig() {
+        Map<String, Object> config = new HashMap<>();
+        config.put("roots", cassandraContainer.getHost() + ":" + cassandraContainer.getMappedPort(9042));
+        config.put("keyspace", KEYSPACE);
+        config.put("keyname", KEY_COLUMN);
+        config.put("columnFamily", TABLE);
+        config.put("columnName", VALUE_COLUMN);
+        return config;
+    }
+}
