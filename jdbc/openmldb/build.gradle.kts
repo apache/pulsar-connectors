@@ -30,16 +30,19 @@ plugins {
 // - Curator: the SDK calls NodeCache.getListenable() expecting the 4.x signature (returning
 //   ListenerContainer); Curator 5.x changed it to return Listenable -> NoSuchMethodError on
 //   connect under the platform's 5.7.1.
-// - Protobuf: the SDK's generated classes (protoc 3.16) call makeExtensionsImmutable(), removed
-//   in protobuf-java 3.22 -> NoSuchMethodError on insert under the platform's 3.25.5. 3.21.12 is
-//   the newest runtime that still has it. (NARs never bundle protobuf — the Pulsar runtime
-//   provides it — so this only affects compile/test classpaths.)
+// - Protobuf: the SDK's generated classes (protoc 3.16) call makeExtensionsImmutable(), which
+//   protobuf-java 4.x removed (the 3.25.x line still has it). Without the force, the TEST
+//   classpath resolves protobuf 4.x by conflict resolution — io.kubernetes:client-java, a
+//   transitive of the test-only pulsar-functions-instance, requests it — and the SDK throws
+//   NoSuchMethodError on insert. Force the platform's 3.25.5: the same line the Pulsar runtime
+//   provides to the NAR in production (NARs never bundle protobuf), so the test matches what
+//   the connector actually runs against.
 configurations.all {
     resolutionStrategy.force(
         "org.apache.curator:curator-client:4.2.0",
         "org.apache.curator:curator-framework:4.2.0",
         "org.apache.curator:curator-recipes:4.2.0",
-        "com.google.protobuf:protobuf-java:3.21.12",
+        "com.google.protobuf:protobuf-java:3.25.5",
     )
 }
 
