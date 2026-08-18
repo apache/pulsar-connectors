@@ -59,6 +59,7 @@ public abstract class CassandraAbstractSink<K, V> implements Sink<byte[]> {
                 || cassandraSinkConfig.getColumnName() == null) {
             throw new IllegalArgumentException("Required property not set.");
         }
+        cassandraSinkConfig.validateCredentials();
         createClient(cassandraSinkConfig.getRoots());
         statement = session.prepare("INSERT INTO " + cassandraSinkConfig.getColumnFamily() + " ("
                 + cassandraSinkConfig.getKeyname() + ", " + cassandraSinkConfig.getColumnName() + ") VALUES (?, ?)");
@@ -104,8 +105,7 @@ public abstract class CassandraAbstractSink<K, V> implements Sink<byte[]> {
         }
         // Authenticate only when credentials were supplied; an unset pair leaves the connection
         // exactly as it was before these settings existed.
-        if (hasText(cassandraSinkConfig.getUserName())
-                && hasText(cassandraSinkConfig.getPassword())) {
+        if (cassandraSinkConfig.hasCredentials()) {
             b.withCredentials(cassandraSinkConfig.getUserName(), cassandraSinkConfig.getPassword());
         }
         cluster = b.withoutJMXReporting().build();
@@ -114,8 +114,4 @@ public abstract class CassandraAbstractSink<K, V> implements Sink<byte[]> {
     }
 
     public abstract KeyValue<K, V> extractKeyValue(Record<byte[]> record);
-
-    private static boolean hasText(String value) {
-        return value != null && !value.trim().isEmpty();
-    }
 }

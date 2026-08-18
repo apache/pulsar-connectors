@@ -21,6 +21,8 @@ package org.apache.pulsar.io.cassandra;
 import static org.mockito.Mockito.mock;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertNull;
+import static org.testng.Assert.assertTrue;
+import static org.testng.Assert.fail;
 import com.datastax.driver.core.Cluster;
 import com.datastax.driver.core.Session;
 import java.time.Duration;
@@ -45,6 +47,9 @@ import org.testng.annotations.Test;
  * omitting them stops the sink writing to a cluster that never asked for them. The last of those is
  * the regression this connector most needs guarded — an existing unauthenticated deployment must be
  * unaffected by the settings existing.
+ *
+ * <p>It also covers the one case the connector rejects on its own account, without asking a server
+ * anything: a pair with only one half set.
  *
  * <p>That a server actually refuses a connection without credentials, and that the configured pair
  * is what gets past the refusal, is asserted in {@link CassandraSinkAuthEnforcementTest}, which runs
@@ -114,6 +119,46 @@ public class CassandraSinkAuthTest {
     @Test
     public void sinkWritesWithoutCredentials() throws Exception {
         assertWriteSucceeds(baseConfig(), "no-credentials");
+    }
+
+    @Test
+    public void openRejectsUsernameWithoutPassword() {
+        Map<String, Object> config = unroutableConfig();
+        config.put("userName", "cassandra");
+
+        assertHalfConfiguredPairRejected(config);
+    }
+
+    @Test
+    public void openRejectsPasswordWithoutUsername() {
+        Map<String, Object> config = unroutableConfig();
+        config.put("password", "cassandra");
+
+        assertHalfConfiguredPairRejected(config);
+    }
+
+    private void assertHalfConfiguredPairRejected(Map<String, Object> config) {
+        try {
+            new CassandraStringSink().open(config, mock(SinkContext.class));
+            fail("Expected open() to reject a credential pair with only one half set");
+        } catch (IllegalArgumentException e) {
+            assertTrue(e.getMessage().contains("userName and password must be supplied together"),
+                    "Rejected for some other reason: " + e.getMessage());
+        } catch (Exception e) {
+            fail("Expected IllegalArgumentException, got: " + e);
+        }
+    }
+
+    /**
+     * Config whose {@code roots} point at a port nothing listens on. The rejection above has to
+     * happen before any connection is attempted, and pointing somewhere unreachable is what makes
+     * the test say so: drop the validation and this fails connecting rather than passing for the
+     * wrong reason.
+     */
+    private Map<String, Object> unroutableConfig() {
+        Map<String, Object> config = baseConfig();
+        config.put("roots", "127.0.0.1:1");
+        return config;
     }
 
     private void assertWriteSucceeds(Map<String, Object> config, String key) throws Exception {

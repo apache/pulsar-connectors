@@ -39,14 +39,16 @@ public class CassandraSinkConfig implements Serializable {
         defaultValue = "",
         sensitive = true,
         help = "Username used to authenticate against the cluster specified by `roots`. "
-                + "Leave unset for a cluster that does not require authentication.")
+                + "Must be set together with the other half of the pair; leave both unset "
+                + "for a cluster that does not require authentication.")
     private String userName;
     @FieldDoc(
         required = false,
         defaultValue = "",
         sensitive = true,
         help = "Password used to authenticate against the cluster specified by `roots`. "
-                + "Leave unset for a cluster that does not require authentication.")
+                + "Must be set together with the other half of the pair; leave both unset "
+                + "for a cluster that does not require authentication.")
     private String password;
     @FieldDoc(
         required = true,
@@ -82,5 +84,32 @@ public class CassandraSinkConfig implements Serializable {
     public static CassandraSinkConfig load(Map<String, Object> map) throws IOException {
         ObjectMapper mapper = new ObjectMapper();
         return mapper.readValue(mapper.writeValueAsString(map), CassandraSinkConfig.class);
+    }
+
+    /**
+     * Rejects a credential pair with only one half set. Half a pair is never a meaningful
+     * configuration — whichever half is present, the intent was to authenticate — and connecting
+     * unauthenticated instead turns a typo into either a rejection from the server that names
+     * neither setting, or a silent success against a cluster that does not yet require
+     * authentication. Sinks call this before connecting, so the failure names what is wrong.
+     */
+    public void validateCredentials() {
+        if (hasText(userName) != hasText(password)) {
+            throw new IllegalArgumentException("userName and password must be supplied together: "
+                    + "set both to authenticate, or neither to connect to a cluster that does not "
+                    + "require authentication.");
+        }
+    }
+
+    /**
+     * Whether to authenticate at all. Only ever true for a complete pair, and
+     * {@link #validateCredentials()} has already rejected an incomplete one.
+     */
+    public boolean hasCredentials() {
+        return hasText(userName) && hasText(password);
+    }
+
+    private static boolean hasText(String value) {
+        return value != null && !value.trim().isEmpty();
     }
 }

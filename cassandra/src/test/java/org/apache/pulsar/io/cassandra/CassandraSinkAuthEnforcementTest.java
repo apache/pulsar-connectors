@@ -138,6 +138,15 @@ public class CassandraSinkAuthEnforcementTest {
     }
 
     @Test
+    public void sinkFailsToOpenWithUnknownUser() {
+        Map<String, Object> config = baseConfig();
+        config.put("userName", "no-such-user");
+        config.put("password", SUPERUSER_PASSWORD);
+
+        assertOpenIsRejected(config);
+    }
+
+    @Test
     public void sinkWritesWhenCredentialsAreCorrect() throws Exception {
         Map<String, Object> config = baseConfig();
         config.put("userName", SUPERUSER);
