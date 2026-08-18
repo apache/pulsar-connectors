@@ -36,15 +36,19 @@ import org.testng.annotations.BeforeClass;
 import org.testng.annotations.Test;
 
 /**
- * Covers the {@code userName} / {@code password} settings on {@link CassandraSinkConfig}.
+ * Covers the {@code userName} / {@code password} settings on {@link CassandraSinkConfig} against a
+ * cluster that does <em>not</em> require authentication — the image default,
+ * {@code AllowAllAuthenticator}.
  *
- * <p>Scope, stated plainly: these assert that credentials are carried through config loading and
- * that supplying them still yields a working connection and write. They do <em>not</em> assert that
- * the server rejects a connection without them — the Cassandra test container runs with the default
- * {@code AllowAllAuthenticator}, and switching it to {@code PasswordAuthenticator} needs a full
- * version-specific {@code cassandra.yaml} override. Enforcement is the server's behaviour; what is
- * this connector's to get right is that the credentials reach the driver, and that an unset pair
- * leaves the connection exactly as it was.
+ * <p>What that arrangement is good for is the compatibility half of these settings: credentials
+ * survive config loading, an unset pair is still unset, and neither supplying credentials nor
+ * omitting them stops the sink writing to a cluster that never asked for them. The last of those is
+ * the regression this connector most needs guarded — an existing unauthenticated deployment must be
+ * unaffected by the settings existing.
+ *
+ * <p>That a server actually refuses a connection without credentials, and that the configured pair
+ * is what gets past the refusal, is asserted in {@link CassandraSinkAuthEnforcementTest}, which runs
+ * a container with {@code PasswordAuthenticator} enabled.
  */
 public class CassandraSinkAuthTest {
 
