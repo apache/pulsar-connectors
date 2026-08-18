@@ -23,6 +23,7 @@ plugins {
 }
 dependencies {
     implementation(libs.pulsar.io.core)
+    implementation(libs.pulsar.io.common)
     implementation(libs.jackson.databind)
     implementation(libs.jackson.dataformat.yaml)
     implementation(libs.cassandra.driver)
