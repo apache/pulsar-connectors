@@ -21,8 +21,12 @@ package org.apache.pulsar.io.redis;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.Lists;
 import com.google.common.net.HostAndPort;
+import io.lettuce.core.SslVerifyMode;
+import java.io.File;
 import java.io.Serializable;
+import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 import lombok.Data;
 import lombok.experimental.Accessors;
 import org.apache.commons.lang3.StringUtils;
@@ -82,8 +86,9 @@ public class RedisAbstractConfig implements Serializable {
     @FieldDoc(
         required = false,
         defaultValue = "",
-        help = "Filesystem path to a trust store (e.g. JKS or PKCS12) used to validate the Redis server's TLS "
-            + "certificate when redisUseTls is enabled. If left blank, the JVM's default trust store is used")
+        help = "Filesystem path to a trust store used to validate the Redis server's TLS certificate when "
+            + "redisUseTls is enabled. If left blank, the JVM's default trust store is used. See "
+            + "redisTlsTrustStoreType to configure the trust store's format")
     private String redisTlsTrustStorePath;
 
     @FieldDoc(
@@ -92,6 +97,13 @@ public class RedisAbstractConfig implements Serializable {
         sensitive = true,
         help = "The password for the trust store configured via redisTlsTrustStorePath")
     private String redisTlsTrustStorePassword;
+
+    @FieldDoc(
+        required = false,
+        defaultValue = "",
+        help = "The type of the trust store configured via redisTlsTrustStorePath (e.g. JKS or PKCS12). If left "
+            + "blank, the JVM's default trust store type (KeyStore.getDefaultType()) is used")
+    private String redisTlsTrustStoreType;
 
     @FieldDoc(
         required = false,
@@ -132,8 +144,19 @@ public class RedisAbstractConfig implements Serializable {
     public void validate() {
         Preconditions.checkNotNull(clientMode, "clientMode property not set.");
         Preconditions.checkArgument(redisTlsVerifyPeer != null, "redisTlsVerifyPeer property not set.");
+        try {
+            SslVerifyMode.valueOf(redisTlsVerifyPeer.toUpperCase(Locale.ROOT));
+        } catch (IllegalArgumentException | NullPointerException e) {
+            throw new IllegalArgumentException("redisTlsVerifyPeer must be one of "
+                + Arrays.asList(SslVerifyMode.values()) + ", got: " + redisTlsVerifyPeer);
+        }
         Preconditions.checkArgument(StringUtils.isBlank(redisUser) || !StringUtils.isBlank(redisPassword),
             "redisPassword must be set when redisUser is set.");
+        if (redisUseTls && !StringUtils.isBlank(redisTlsTrustStorePath)) {
+            File truststore = new File(redisTlsTrustStorePath);
+            Preconditions.checkArgument(truststore.exists() && truststore.canRead(),
+                "redisTlsTrustStorePath does not exist or is not readable: " + redisTlsTrustStorePath);
+        }
     }
 
     public enum ClientMode {

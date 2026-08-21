@@ -40,10 +40,13 @@ import java.io.File;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
+import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.pulsar.io.redis.RedisAbstractConfig.ClientMode;
 import org.apache.pulsar.io.redis.sink.RedisSinkConfig;
 
+@Slf4j
 public class RedisSession {
 
     private final AbstractRedisClient client;
@@ -90,7 +93,7 @@ public class RedisSession {
 
         final ClientMode clientMode;
         try {
-            clientMode = ClientMode.valueOf(config.getClientMode().toUpperCase());
+            clientMode = ClientMode.valueOf(config.getClientMode().toUpperCase(Locale.ROOT));
         } catch (IllegalArgumentException e) {
             throw new IllegalArgumentException("Illegal Redis client mode, valid values are: "
                 + Arrays.asList(ClientMode.values()));
@@ -112,6 +115,7 @@ public class RedisSession {
             redisSession = new RedisSession(client, connection, connection.async());
         } else if (clientMode == ClientMode.CLUSTER) {
             ClusterClientOptions.Builder clientOptions = ClusterClientOptions.builder()
+                .socketOptions(socketOptions)
                 .sslOptions(sslOptions)
                 .requestQueueSize(config.getRequestQueue())
                 .autoReconnect(config.isAutoReconnect());
@@ -133,14 +137,20 @@ public class RedisSession {
     @VisibleForTesting
     static List<RedisURI> redisURIs(List<HostAndPort> hostAndPorts, RedisSinkConfig config) {
         List<RedisURI> redisURIs = Lists.newArrayList();
+        final SslVerifyMode verifyMode = config.isRedisUseTls()
+            ? parseVerifyMode(config.getRedisTlsVerifyPeer()) : null;
+        if (verifyMode != null && verifyMode != SslVerifyMode.FULL) {
+            log.warn("Redis TLS verify-peer mode is set to {}, which weakens or disables certificate/hostname "
+                + "verification and should not be used in production", verifyMode);
+        }
         for (HostAndPort hostAndPort : hostAndPorts) {
             RedisURI.Builder builder = RedisURI.builder();
             builder.withHost(hostAndPort.getHost());
             builder.withPort(hostAndPort.getPort());
             builder.withDatabase(config.getRedisDatabase());
             builder.withSsl(config.isRedisUseTls());
-            if (config.isRedisUseTls()) {
-                builder.withVerifyPeer(parseVerifyMode(config.getRedisTlsVerifyPeer()));
+            if (verifyMode != null) {
+                builder.withVerifyPeer(verifyMode);
             }
             if (!StringUtils.isBlank(config.getRedisUser()) && !StringUtils.isBlank(config.getRedisPassword())) {
                 builder.withAuthentication(config.getRedisUser(), config.getRedisPassword());
@@ -155,10 +165,13 @@ public class RedisSession {
 
     private static SslVerifyMode parseVerifyMode(String value) {
         try {
-            return SslVerifyMode.valueOf(value.toUpperCase());
+            return SslVerifyMode.valueOf(value.toUpperCase(Locale.ROOT));
         } catch (IllegalArgumentException e) {
-            throw new IllegalArgumentException("Illegal Redis TLS verify-peer mode, valid values are: "
-                + Arrays.asList(SslVerifyMode.values()));
+            // RedisAbstractConfig.validate() already rejects invalid redisTlsVerifyPeer values
+            // at config-validation time, so this is unreachable for user input in practice.
+            // Kept defensive in case this method is ever called with an unvalidated value.
+            throw new IllegalArgumentException("Illegal Redis TLS verify-peer mode '" + value
+                + "', valid values are: " + Arrays.asList(SslVerifyMode.values()), e);
         }
     }
 
@@ -169,6 +182,9 @@ public class RedisSession {
         }
         File truststore = new File(config.getRedisTlsTrustStorePath());
         SslOptions.Builder builder = SslOptions.builder();
+        if (!StringUtils.isBlank(config.getRedisTlsTrustStoreType())) {
+            builder.keyStoreType(config.getRedisTlsTrustStoreType());
+        }
         if (StringUtils.isBlank(config.getRedisTlsTrustStorePassword())) {
             builder.truststore(truststore);
         } else {

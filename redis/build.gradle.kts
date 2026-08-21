@@ -34,4 +34,15 @@ dependencies {
     implementation(libs.commons.collections4)
 
     testImplementation(libs.embedded.redis)
+    testImplementation(libs.testcontainers)
+}
+
+tasks.test {
+    // Lettuce auto-detects Netty's io_uring transport and allocates a ring buffer per real
+    // client connection. Sandboxes with a low memlock ulimit only have budget for about one
+    // such allocation per JVM, which made RedisSinkTlsIntegrationTest's real Redis connections
+    // (alongside RedisSinkTest's) flake intermittently. Falling back to epoll/NIO avoids that
+    // native resource ceiling; it has no effect on production code, which never sets this
+    // property.
+    systemProperty("io.lettuce.core.iouring", "false")
 }

@@ -29,6 +29,7 @@ import io.lettuce.core.SslOptions;
 import io.lettuce.core.SslVerifyMode;
 import java.io.File;
 import java.io.IOException;
+import java.security.KeyStoreException;
 import java.util.List;
 import org.apache.pulsar.io.redis.sink.RedisSinkConfig;
 import org.testng.annotations.Test;
@@ -198,6 +199,50 @@ public class RedisSessionTest {
         badConfig.setRedisTlsTrustStorePassword("wrong-password");
         SslOptions badSslOptions = RedisSession.buildSslOptions(badConfig);
         expectThrows(IOException.class, badSslOptions::createSslContextBuilder);
+    }
+
+    @Test
+    public final void buildSslOptionsWithCorrectTrustStoreTypeTest() throws Exception {
+        RedisSinkConfig config = new RedisSinkConfig();
+        config.setRedisHosts("localhost:6379");
+        config.setRedisUseTls(true);
+        config.setRedisTlsTrustStorePath(getFile("tls/redis-test-truststore.jks").getAbsolutePath());
+        config.setRedisTlsTrustStorePassword(TEST_TRUSTSTORE_PASSWORD);
+        // The fixture is actually PKCS12 content despite its .jks extension (see tls/README.md).
+        config.setRedisTlsTrustStoreType("PKCS12");
+
+        SslOptions sslOptions = RedisSession.buildSslOptions(config);
+        assertNotNull(sslOptions.createSslContextBuilder());
+    }
+
+    @Test
+    public final void buildSslOptionsWithUnknownTrustStoreTypeFailsTest() {
+        RedisSinkConfig config = new RedisSinkConfig();
+        config.setRedisHosts("localhost:6379");
+        config.setRedisUseTls(true);
+        config.setRedisTlsTrustStorePath(getFile("tls/redis-test-truststore.jks").getAbsolutePath());
+        config.setRedisTlsTrustStorePassword(TEST_TRUSTSTORE_PASSWORD);
+        config.setRedisTlsTrustStoreType("not-a-real-keystore-type");
+
+        SslOptions sslOptions = RedisSession.buildSslOptions(config);
+        // Negative check: an unrecognized keystore type must fail to load, proving the type is
+        // genuinely passed through to Lettuce rather than ignored. KeyStore.getInstance(type)
+        // throws KeyStoreException when no provider supports the given type.
+        expectThrows(KeyStoreException.class, sslOptions::createSslContextBuilder);
+    }
+
+    @Test
+    public final void buildSslOptionsWithNoTrustStoreTypeUsesJvmDefaultTest() throws Exception {
+        RedisSinkConfig config = new RedisSinkConfig();
+        config.setRedisHosts("localhost:6379");
+        config.setRedisUseTls(true);
+        config.setRedisTlsTrustStorePath(getFile("tls/redis-test-truststore.jks").getAbsolutePath());
+        config.setRedisTlsTrustStorePassword(TEST_TRUSTSTORE_PASSWORD);
+
+        // No redisTlsTrustStoreType set: must still fall back to the JVM default and succeed,
+        // matching pre-existing behavior before this field was introduced.
+        SslOptions sslOptions = RedisSession.buildSslOptions(config);
+        assertNotNull(sslOptions.createSslContextBuilder());
     }
 
     @Test
