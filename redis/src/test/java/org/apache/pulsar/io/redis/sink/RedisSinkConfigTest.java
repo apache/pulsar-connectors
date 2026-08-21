@@ -20,6 +20,7 @@ package org.apache.pulsar.io.redis.sink;
 
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertNotNull;
+import static org.testng.Assert.assertNull;
 import java.io.File;
 import java.io.IOException;
 import java.util.HashMap;
@@ -117,6 +118,171 @@ public class RedisSinkConfigTest {
         SinkContext sinkContext = Mockito.mock(SinkContext.class);
         RedisSinkConfig config = RedisSinkConfig.load(map, sinkContext);
         config.validate();
+    }
+
+    @Test
+    public final void defaultTlsTrustFieldsTest() throws IOException {
+        Map<String, Object> map = new HashMap<String, Object>();
+        map.put("redisHosts", "localhost:6379");
+        map.put("redisPassword", "fake@123");
+        map.put("redisDatabase", "1");
+        map.put("clientMode", "Standalone");
+        map.put("operationTimeout", "2000");
+        map.put("batchSize", "100");
+        map.put("batchTimeMs", "1000");
+        map.put("connectTimeout", "3000");
+
+        SinkContext sinkContext = Mockito.mock(SinkContext.class);
+        RedisSinkConfig config = RedisSinkConfig.load(map, sinkContext);
+        assertNotNull(config);
+        assertEquals(config.getRedisTlsVerifyPeer(), "FULL");
+        assertNull(config.getRedisTlsTrustStorePath());
+        assertNull(config.getRedisTlsTrustStorePassword());
+    }
+
+    @Test(expectedExceptions = IllegalArgumentException.class,
+        expectedExceptionsMessageRegExp = "redisTlsVerifyPeer property not set.")
+    public final void nullRedisTlsVerifyPeerFailsValidateTest() throws IOException {
+        Map<String, Object> map = new HashMap<String, Object>();
+        map.put("redisHosts", "localhost:6379");
+        map.put("redisPassword", "fake@123");
+        map.put("redisDatabase", "1");
+        map.put("clientMode", "Standalone");
+        map.put("operationTimeout", "2000");
+        map.put("batchSize", "100");
+        map.put("batchTimeMs", "1000");
+        map.put("connectTimeout", "3000");
+
+        SinkContext sinkContext = Mockito.mock(SinkContext.class);
+        RedisSinkConfig config = RedisSinkConfig.load(map, sinkContext);
+        config.setRedisTlsVerifyPeer(null);
+        config.validate();
+    }
+
+    @Test(expectedExceptions = IllegalArgumentException.class,
+        expectedExceptionsMessageRegExp = "redisTlsVerifyPeer must be one of \\[NONE, CA, FULL\\], got: bogus")
+    public final void invalidRedisTlsVerifyPeerFailsValidateTest() throws IOException {
+        Map<String, Object> map = new HashMap<String, Object>();
+        map.put("redisHosts", "localhost:6379");
+        map.put("redisPassword", "fake@123");
+        map.put("redisDatabase", "1");
+        map.put("clientMode", "Standalone");
+        map.put("operationTimeout", "2000");
+        map.put("batchSize", "100");
+        map.put("batchTimeMs", "1000");
+        map.put("connectTimeout", "3000");
+
+        SinkContext sinkContext = Mockito.mock(SinkContext.class);
+        RedisSinkConfig config = RedisSinkConfig.load(map, sinkContext);
+        config.setRedisTlsVerifyPeer("bogus");
+        config.validate();
+    }
+
+    @Test(expectedExceptions = IllegalArgumentException.class,
+        expectedExceptionsMessageRegExp = "redisTlsTrustStorePath does not exist or is not readable: "
+            + "/tmp/nonexistent-truststore-xyz.jks")
+    public final void missingTrustStorePathFailsValidateWhenTlsEnabledTest() throws IOException {
+        Map<String, Object> map = new HashMap<String, Object>();
+        map.put("redisHosts", "localhost:6379");
+        map.put("redisPassword", "fake@123");
+        map.put("redisDatabase", "1");
+        map.put("clientMode", "Standalone");
+        map.put("redisUseTls", "true");
+        map.put("redisTlsTrustStorePath", "/tmp/nonexistent-truststore-xyz.jks");
+        map.put("operationTimeout", "2000");
+        map.put("batchSize", "100");
+        map.put("batchTimeMs", "1000");
+        map.put("connectTimeout", "3000");
+
+        SinkContext sinkContext = Mockito.mock(SinkContext.class);
+        RedisSinkConfig config = RedisSinkConfig.load(map, sinkContext);
+        config.validate();
+    }
+
+    @Test
+    public final void missingTrustStorePathIgnoredWhenTlsDisabledTest() throws IOException {
+        Map<String, Object> map = new HashMap<String, Object>();
+        map.put("redisHosts", "localhost:6379");
+        map.put("redisPassword", "fake@123");
+        map.put("redisDatabase", "1");
+        map.put("clientMode", "Standalone");
+        map.put("redisTlsTrustStorePath", "/tmp/nonexistent-truststore-xyz.jks");
+        map.put("operationTimeout", "2000");
+        map.put("batchSize", "100");
+        map.put("batchTimeMs", "1000");
+        map.put("connectTimeout", "3000");
+
+        SinkContext sinkContext = Mockito.mock(SinkContext.class);
+        RedisSinkConfig config = RedisSinkConfig.load(map, sinkContext);
+        assertEquals(config.isRedisUseTls(), false);
+        config.validate();
+    }
+
+    @Test
+    public final void realTrustStorePathPassesValidateWhenTlsEnabledTest() throws IOException {
+        File truststore = getFile("tls/redis-test-truststore.jks");
+
+        Map<String, Object> map = new HashMap<String, Object>();
+        map.put("redisHosts", "localhost:6379");
+        map.put("redisPassword", "fake@123");
+        map.put("redisDatabase", "1");
+        map.put("clientMode", "Standalone");
+        map.put("redisUseTls", "true");
+        map.put("redisTlsTrustStorePath", truststore.getAbsolutePath());
+        map.put("operationTimeout", "2000");
+        map.put("batchSize", "100");
+        map.put("batchTimeMs", "1000");
+        map.put("connectTimeout", "3000");
+
+        SinkContext sinkContext = Mockito.mock(SinkContext.class);
+        RedisSinkConfig config = RedisSinkConfig.load(map, sinkContext);
+        config.validate();
+    }
+
+    @Test
+    public final void loadFromMapWithTlsTrustFieldsTest() throws IOException {
+        Map<String, Object> map = new HashMap<String, Object>();
+        map.put("redisHosts", "localhost:6379");
+        map.put("redisPassword", "fake@123");
+        map.put("redisDatabase", "1");
+        map.put("clientMode", "Standalone");
+        map.put("redisUseTls", "true");
+        map.put("redisTlsVerifyPeer", "CA");
+        map.put("redisTlsTrustStorePath", "/tmp/fake-truststore.jks");
+        map.put("redisTlsTrustStorePassword", "trust@123");
+        map.put("operationTimeout", "2000");
+        map.put("batchSize", "100");
+        map.put("batchTimeMs", "1000");
+        map.put("connectTimeout", "3000");
+
+        SinkContext sinkContext = Mockito.mock(SinkContext.class);
+        RedisSinkConfig config = RedisSinkConfig.load(map, sinkContext);
+        assertNotNull(config);
+        assertEquals(config.getRedisTlsVerifyPeer(), "CA");
+        assertEquals(config.getRedisTlsTrustStorePath(), "/tmp/fake-truststore.jks");
+        assertEquals(config.getRedisTlsTrustStorePassword(), "trust@123");
+    }
+
+    @Test
+    public final void loadTlsTrustStorePasswordFromSecretTest() throws IOException {
+        Map<String, Object> map = new HashMap<String, Object>();
+        map.put("redisHosts", "localhost:6379");
+        map.put("redisPassword", "fake@123");
+        map.put("redisDatabase", "1");
+        map.put("clientMode", "Standalone");
+        map.put("redisUseTls", "true");
+        map.put("redisTlsTrustStorePath", "/tmp/fake-truststore.jks");
+        map.put("operationTimeout", "2000");
+        map.put("batchSize", "100");
+        map.put("batchTimeMs", "1000");
+        map.put("connectTimeout", "3000");
+
+        SinkContext sinkContext = Mockito.mock(SinkContext.class);
+        Mockito.when(sinkContext.getSecret("redisTlsTrustStorePassword"))
+                .thenReturn("trust@123");
+        RedisSinkConfig config = RedisSinkConfig.load(map, sinkContext);
+        assertNotNull(config);
+        assertEquals(config.getRedisTlsTrustStorePassword(), "trust@123");
     }
 
     @Test
