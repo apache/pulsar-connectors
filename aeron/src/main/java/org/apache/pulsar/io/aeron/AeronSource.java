@@ -20,6 +20,7 @@ package org.apache.pulsar.io.aeron;
 
 import io.aeron.Aeron;
 import io.aeron.Subscription;
+import io.aeron.archive.client.AeronArchive;
 import io.aeron.driver.MediaDriver;
 import io.aeron.driver.ThreadingMode;
 import java.util.Map;
@@ -39,11 +40,21 @@ import org.slf4j.LoggerFactory;
  * only to a caller that polls: a dedicated thread runs the poll loop and pushes into the
  * source's internal queue, which the function framework drains via {@code read()}.
  *
- * <p><b>Delivery semantics: at-most-once.</b> Plain Aeron is a transport with no persistence
- * and no resumable position, so nothing can be replayed. Messages are lost across connector
- * restarts, and a multicast subscriber that falls behind loses data once the publisher's term
- * buffer rotates. Lossless ingestion needs Aeron Archive, which {@link AeronPoller} leaves
- * room for but this implementation does not provide.
+ * <p><b>Delivery semantics depend on the configured mode, and they differ materially.</b>
+ *
+ * <ul>
+ *   <li><b>{@code transport}</b> (default) reads the live Aeron stream and is
+ *       <b>at-most-once</b>. Plain Aeron has no persistence and no resumable position, so nothing
+ *       can be replayed: messages are lost across connector restarts, and a multicast subscriber
+ *       that falls behind loses data once the publisher's term buffer rotates.
+ *   <li><b>{@code archive}</b> replays from an Aeron Archive recording, so a position in durable
+ *       storage exists and data missed while the connector was down can be re-read. Records carry
+ *       the archive position as their record sequence, which broker deduplication can use.
+ * </ul>
+ *
+ * <p>Because the guarantees differ, the mode is an explicit setting rather than a boolean flag,
+ * and archive settings supplied in transport mode are rejected rather than ignored — a
+ * half-configured archive setup that quietly runs at-most-once is the worst available outcome.
  *
  * <p>A single instance owns one subscription; parallelism greater than 1 would give every
  * instance the same full stream rather than partitioning it.
@@ -62,6 +73,7 @@ public class AeronSource extends PushSource<byte[]> {
     private MediaDriver mediaDriver;
     private Aeron aeron;
     private Subscription subscription;
+    private AeronArchive archive;
     private AeronPoller poller;
     private Thread pollerThread;
 
@@ -97,18 +109,33 @@ public class AeronSource extends PushSource<byte[]> {
             }
             aeron = Aeron.connect(aeronContext);
 
-            subscription = aeron.addSubscription(
-                    aeronSourceConfig.getChannel(), aeronSourceConfig.getStreamId());
-
-            poller = new AeronPollingRunner(subscription, aeronSourceConfig, this::consume, sourceContext);
+            if (aeronSourceConfig.isArchiveMode()) {
+                archive = AeronArchive.connect(new AeronArchive.Context()
+                        .aeron(aeron)
+                        // The source owns the Aeron client; the archive must not close it.
+                        .ownsAeronClient(false)
+                        .controlRequestChannel(aeronSourceConfig.getArchiveControlRequestChannel())
+                        .controlResponseChannel(
+                                aeronSourceConfig.getArchiveControlResponseChannel()));
+                poller = new ArchivePollingRunner(
+                        archive, aeronSourceConfig, this::consume, sourceContext);
+            } else {
+                subscription = aeron.addSubscription(
+                        aeronSourceConfig.getChannel(), aeronSourceConfig.getStreamId());
+                poller = new AeronPollingRunner(
+                        subscription, aeronSourceConfig, this::consume, sourceContext);
+            }
             // A dedicated thread, not a shared pool: the loop runs until close() and would
             // otherwise occupy a pool thread indefinitely.
             pollerThread = new Thread(poller, threadName(sourceContext));
             pollerThread.setDaemon(true);
             pollerThread.start();
 
-            LOG.info("Aeron source subscribed to channel {} stream {}",
-                    aeronSourceConfig.getChannel(), aeronSourceConfig.getStreamId());
+            // Log the mode: it determines the delivery guarantee, so it must be visible in the
+            // logs rather than only in the config someone has to go and look up.
+            LOG.info("Aeron source started in '{}' mode on channel {} stream {}",
+                    aeronSourceConfig.getMode(), aeronSourceConfig.getChannel(),
+                    aeronSourceConfig.getStreamId());
         } catch (Exception e) {
             // open() failing part-way would otherwise leak a media driver process and its
             // directory, since the framework does not call close() on a failed open().
@@ -169,6 +196,16 @@ public class AeronSource extends PushSource<byte[]> {
                 LOG.warn("Failed to close Aeron subscription", e);
             }
             subscription = null;
+        }
+        if (archive != null) {
+            try {
+                // Constructed with ownsAeronClient(false), so this closes only the archive's own
+                // control session and leaves the Aeron client for the block below.
+                archive.close();
+            } catch (Exception e) {
+                LOG.warn("Failed to close Aeron archive client", e);
+            }
+            archive = null;
         }
         if (aeron != null) {
             try {

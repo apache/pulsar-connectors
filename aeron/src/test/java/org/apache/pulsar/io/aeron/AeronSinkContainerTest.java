@@ -95,6 +95,11 @@ public class AeronSinkContainerTest {
     @BeforeMethod
     public void setUp() throws Exception {
         pulsarContainer = new PulsarContainer(DockerImageName.parse(PULSAR_IMAGE))
+                // Starts the functions worker AND the stream storage (BookKeeper table) service.
+                // The container's default command appends "--no-functions-worker -nss", and it is
+                // the -nss ("no stream storage") that would leave the state store absent — which
+                // the source's archive mode requires for checkpointing.
+                .withFunctionsWorker()
                 .withStartupTimeout(Duration.ofMinutes(5));
         pulsarContainer.start();
 
@@ -105,11 +110,21 @@ public class AeronSinkContainerTest {
                 .serviceHttpUrl(pulsarContainer.getHttpServiceUrl())
                 .build();
 
+        // Bootstrap creates the "public" tenant and the "public/default" namespace
+        // asynchronously, and the container's wait strategy can return before either lands.
+        // Waiting on the tenant alone is not enough: the namespace is created after it, so a
+        // producer can still fail with "Namespace not found". Enabling the functions worker
+        // shifted the timing enough to make that visible in CI.
         Awaitility.await("public tenant created")
                 .atMost(60, TimeUnit.SECONDS)
                 .pollInterval(250, TimeUnit.MILLISECONDS)
                 .ignoreExceptions()
                 .until(() -> admin.tenants().getTenants().contains("public"));
+        Awaitility.await("public/default namespace created")
+                .atMost(60, TimeUnit.SECONDS)
+                .pollInterval(250, TimeUnit.MILLISECONDS)
+                .ignoreExceptions()
+                .until(() -> admin.namespaces().getNamespaces("public").contains("public/default"));
 
         topicName = "persistent://public/default/aggregates-" + System.nanoTime();
         producer = pulsarClient.newProducer(Schema.BYTES).topic(topicName).create();
