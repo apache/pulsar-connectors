@@ -16,21 +16,4 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-
-plugins {
-    id("pulsar-connectors.java-conventions")
-    id("pulsar-connectors.nar-conventions")
-}
-dependencies {
-    // CassandraSinkConfig and the table-mapping sinks live in :cassandra-core so that the NAR modules
-    // for the other two connectors can depend on them; see that module's build file for why it is not
-    // a NAR itself.
-    implementation(project(":cassandra-core"))
-    implementation(libs.pulsar.io.core)
-    implementation(libs.pulsar.io.common)
-    implementation(libs.jackson.databind)
-    implementation(libs.jackson.dataformat.yaml)
-    implementation(libs.cassandra.driver)
-
-    testImplementation(libs.testcontainers.cassandra)
-}
+package org.apache.pulsar.io.cassandra.util;

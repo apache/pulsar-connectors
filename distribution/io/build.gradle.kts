@@ -38,6 +38,8 @@ val connectorNars by configurations.creating {
 
 dependencies {
     connectorNars(project(":cassandra"))
+    connectorNars(project(":cassandra-generic-record"))
+    connectorNars(project(":cassandra-json"))
     connectorNars(project(":kafka"))
     connectorNars(project(":http"))
     connectorNars(project(":kinesis"))

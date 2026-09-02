@@ -22,15 +22,8 @@ plugins {
     id("pulsar-connectors.nar-conventions")
 }
 dependencies {
-    // CassandraSinkConfig and the table-mapping sinks live in :cassandra-core so that the NAR modules
-    // for the other two connectors can depend on them; see that module's build file for why it is not
-    // a NAR itself.
+    // The sink classes themselves live in :cassandra-core, shared with the `cassandra` sink; this
+    // module exists only to give this connector its own NAR, because a NAR's pulsar-io.yaml can
+    // declare exactly one sinkClass and so one NAR can offer exactly one connector by name.
     implementation(project(":cassandra-core"))
-    implementation(libs.pulsar.io.core)
-    implementation(libs.pulsar.io.common)
-    implementation(libs.jackson.databind)
-    implementation(libs.jackson.dataformat.yaml)
-    implementation(libs.cassandra.driver)
-
-    testImplementation(libs.testcontainers.cassandra)
 }

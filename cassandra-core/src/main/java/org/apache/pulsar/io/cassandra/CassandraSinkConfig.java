@@ -60,10 +60,15 @@ public class CassandraSinkConfig implements Serializable {
         defaultValue = "",
         help = "The key space used for writing pulsar messages to")
     private String keyspace;
+    // Not required = true: that is enforced at load time for every sink sharing this config, and the
+    // table-mapping sinks have no use for it. `cassandra` still requires it, and checks so itself in
+    // CassandraAbstractSink.open().
     @FieldDoc(
-        required = true,
+        required = false,
         defaultValue = "",
-        help = "The key name of the cassandra column family")
+        help = "The key name of the cassandra column family. Required by the `cassandra` sink. "
+                + "Unused by `cassandra-generic-record` and `cassandra-json`, which map record "
+                + "fields onto columns by name.")
     private String keyname;
     @FieldDoc(
         required = true,
@@ -71,9 +76,11 @@ public class CassandraSinkConfig implements Serializable {
         help = "The cassandra column family name")
     private String columnFamily;
     @FieldDoc(
-        required = true,
+        required = false,
         defaultValue = "",
-        help = "The column name of the cassandra column family")
+        help = "The column name of the cassandra column family. Required by the `cassandra` sink. "
+                + "Unused by `cassandra-generic-record` and `cassandra-json`, which map record "
+                + "fields onto columns by name.")
     private String columnName;
 
     public static CassandraSinkConfig load(String yamlFile) throws IOException {
