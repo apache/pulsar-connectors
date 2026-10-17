@@ -25,7 +25,9 @@ import com.rabbitmq.client.Connection;
 import com.rabbitmq.client.ConnectionFactory;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.Arrays;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import org.apache.pulsar.functions.api.Record;
 import org.apache.pulsar.io.core.SourceContext;
@@ -100,7 +102,67 @@ public class RabbitMQSourceTest {
             Record<byte[]> record = source.read();
             assertEquals("hello", new String(record.getValue(), StandardCharsets.UTF_8));
             assertEquals(queue, record.getProperties().get("__rabbitmq_queue_name"));
+            assertEquals(routingKey, record.getKey().orElse(null));
+            assertEquals(routingKey, record.getProperties().get("__rabbitmq_routing_key"));
             record.ack();
+        } finally {
+            source.close();
+        }
+    }
+
+    @Test(timeOut = 60000)
+    public void testMessageKeyRules() throws Exception {
+        String exchange = "test-key-rules-exchange";
+        String queue = "test-key-rules-queue";
+        Map<String, String> expectedMessageKeys = new LinkedHashMap<>();
+        expectedMessageKeys.put("static.one", "shared");
+        expectedMessageKeys.put("static.two", "shared");
+        expectedMessageKeys.put("dynamic.first.item.1234", "item:1234");
+        expectedMessageKeys.put("dynamic.second.item.1234", "item:1234");
+        expectedMessageKeys.put("other.key", "other.key");
+
+        ConnectionFactory factory = new ConnectionFactory();
+        factory.setHost("localhost");
+        factory.setPort(rabbitMQBrokerManager.getPort());
+        factory.setUsername(rabbitMQBrokerManager.getUser());
+        factory.setPassword(rabbitMQBrokerManager.getPassword());
+        factory.setVirtualHost("default");
+
+        RabbitMQSource source = new RabbitMQSource();
+        SourceContext sourceContext = mock(SourceContext.class);
+
+        try (Connection connection = factory.newConnection();
+             Channel channel = connection.createChannel()) {
+            // the exchange must already exist before the source binds the queue to it
+            channel.exchangeDeclare(exchange, "topic", true);
+
+            Map<String, Object> configs = baseConfigs(queue);
+            configs.put("exchangeName", exchange);
+            configs.put("routingKey", "#");
+            configs.put("durable", "true");
+            Map<String, String> staticRule = new HashMap<>();
+            staticRule.put("regex", "static\\.(?:one|two)");
+            staticRule.put("replacement", "shared");
+            Map<String, String> dynamicRule = new HashMap<>();
+            dynamicRule.put("regex", "dynamic\\.[^.]+\\.([^.]+)\\.([0-9]+)");
+            dynamicRule.put("replacement", "$1:$2");
+            configs.put("messageKeyRules", Arrays.asList(staticRule, dynamicRule));
+
+            // rabbitmq service may need time to initialize
+            Awaitility.await().ignoreExceptions().pollDelay(Duration.ofSeconds(1))
+                    .untilAsserted(() -> source.open(configs, sourceContext));
+
+            for (String routingKey : expectedMessageKeys.keySet()) {
+                channel.basicPublish(exchange, routingKey, null, routingKey.getBytes(StandardCharsets.UTF_8));
+            }
+            for (Map.Entry<String, String> expected : expectedMessageKeys.entrySet()) {
+                Record<byte[]> record = source.read();
+                assertEquals(expected.getKey(), new String(record.getValue(), StandardCharsets.UTF_8));
+                assertEquals(queue, record.getProperties().get("__rabbitmq_queue_name"));
+                assertEquals(expected.getValue(), record.getKey().orElse(null));
+                assertEquals(expected.getKey(), record.getProperties().get("__rabbitmq_routing_key"));
+                record.ack();
+            }
         } finally {
             source.close();
         }

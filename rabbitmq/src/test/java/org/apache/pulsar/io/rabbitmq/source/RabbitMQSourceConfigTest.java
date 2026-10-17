@@ -25,8 +25,10 @@ import static org.testng.Assert.assertNull;
 import com.rabbitmq.client.ConnectionFactory;
 import java.io.File;
 import java.io.IOException;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.regex.PatternSyntaxException;
 import org.apache.pulsar.io.core.SourceContext;
 import org.apache.pulsar.io.rabbitmq.RabbitMQSourceConfig;
 import org.mockito.Mockito;
@@ -88,6 +90,10 @@ public class RabbitMQSourceConfigTest {
         map.put("autoDelete", "true");
         map.put("exchangeName", "test-exchange");
         map.put("routingKey", "test.#");
+        Map<String, String> messageKeyRule = new HashMap<>();
+        messageKeyRule.put("regex", "test\\.(.*)");
+        messageKeyRule.put("replacement", "$1");
+        map.put("messageKeyRules", Collections.singletonList(messageKeyRule));
         map.put("ssl", "true");
 
         SourceContext sourceContext = Mockito.mock(SourceContext.class);
@@ -114,6 +120,8 @@ public class RabbitMQSourceConfigTest {
         assertEquals(true, config.isAutoDelete());
         assertEquals("test-exchange", config.getExchangeName());
         assertEquals("test.#", config.getRoutingKey());
+        assertEquals("test\\.(.*)", config.getMessageKeyRules().get(0).getRegex());
+        assertEquals("$1", config.getMessageKeyRules().get(0).getReplacement());
         assertEquals(true, config.isSsl());
     }
 
@@ -162,6 +170,16 @@ public class RabbitMQSourceConfigTest {
     @Test
     public final void validValidateTest() throws IOException {
         RabbitMQSourceConfig config = validConfig();
+        config.validate();
+    }
+
+    @Test(expectedExceptions = PatternSyntaxException.class)
+    public final void invalidMessageKeyRegexTest() throws IOException {
+        RabbitMQSourceConfig.MessageKeyRule rule = new RabbitMQSourceConfig.MessageKeyRule();
+        rule.setRegex("[");
+        rule.setReplacement("system");
+        RabbitMQSourceConfig config = validConfig()
+                .setMessageKeyRules(Collections.singletonList(rule));
         config.validate();
     }
 

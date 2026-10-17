@@ -24,7 +24,10 @@ import com.google.common.base.Preconditions;
 import java.io.File;
 import java.io.IOException;
 import java.io.Serializable;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
+import java.util.regex.Pattern;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 import lombok.experimental.Accessors;
@@ -96,6 +99,21 @@ public class RabbitMQSourceConfig extends RabbitMQAbstractConfig implements Seri
                     + "Only used when exchangeName is set.")
     private String routingKey = "#";
 
+    @FieldDoc(
+            required = false,
+            defaultValue = "",
+            help = "Ordered regex rules for the Pulsar message key. The first full routing-key match wins; "
+                    + "replacement uses Java regex group references. Unmatched keys are kept unchanged.")
+    private List<MessageKeyRule> messageKeyRules = new ArrayList<>();
+
+    @Data
+    public static class MessageKeyRule implements Serializable {
+        private static final long serialVersionUID = 1L;
+
+        private String regex;
+        private String replacement;
+    }
+
     public static RabbitMQSourceConfig load(String yamlFile) throws IOException {
         ObjectMapper mapper = new ObjectMapper(new YAMLFactory());
         return mapper.readValue(new File(yamlFile), RabbitMQSourceConfig.class);
@@ -114,5 +132,11 @@ public class RabbitMQSourceConfig extends RabbitMQAbstractConfig implements Seri
         Preconditions.checkArgument(exchangeName == null || exchangeName.isEmpty() || routingKey != null,
                 "routingKey must not be null when exchangeName is set.");
         Preconditions.checkArgument(prefetchCount >= 0, "prefetchCount must be non-negative.");
+        Preconditions.checkNotNull(messageKeyRules, "messageKeyRules must not be null.");
+        for (MessageKeyRule rule : messageKeyRules) {
+            Preconditions.checkNotNull(rule, "messageKeyRules must not contain null entries.");
+            Pattern.compile(Preconditions.checkNotNull(rule.getRegex(), "messageKeyRules regex must not be null."));
+            Preconditions.checkNotNull(rule.getReplacement(), "messageKeyRules replacement must not be null.");
+        }
     }
 }

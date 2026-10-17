@@ -26,8 +26,11 @@ import com.rabbitmq.client.DefaultConsumer;
 import com.rabbitmq.client.Envelope;
 import java.io.IOException;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import lombok.Data;
 import org.apache.pulsar.functions.api.Record;
 import org.apache.pulsar.io.core.PushSource;
@@ -52,12 +55,17 @@ public class RabbitMQSource extends PushSource<byte[]> {
     private Connection rabbitMQConnection;
     private Channel rabbitMQChannel;
     private RabbitMQSourceConfig rabbitMQSourceConfig;
+    private final Map<Pattern, String> messageKeyRules = new LinkedHashMap<>();
     private String queueName;
 
     @Override
     public void open(Map<String, Object> config, SourceContext sourceContext) throws Exception {
         rabbitMQSourceConfig = RabbitMQSourceConfig.load(config, sourceContext);
         rabbitMQSourceConfig.validate();
+        messageKeyRules.clear();
+        for (RabbitMQSourceConfig.MessageKeyRule rule : rabbitMQSourceConfig.getMessageKeyRules()) {
+            messageKeyRules.put(Pattern.compile(rule.getRegex()), rule.getReplacement());
+        }
 
         ConnectionFactory connectionFactory = rabbitMQSourceConfig.createConnectionFactory();
         rabbitMQConnection = connectionFactory.newConnection(rabbitMQSourceConfig.getConnectionName());
@@ -105,6 +113,19 @@ public class RabbitMQSource extends PushSource<byte[]> {
         }
     }
 
+    private String mapMessageKey(String routingKey) {
+        if (routingKey == null) {
+            return null;
+        }
+        for (Map.Entry<Pattern, String> rule : messageKeyRules.entrySet()) {
+            Matcher matcher = rule.getKey().matcher(routingKey);
+            if (matcher.matches()) {
+                return matcher.replaceFirst(rule.getValue());
+            }
+        }
+        return routingKey;
+    }
+
     private class RabbitMQConsumer extends DefaultConsumer {
         private RabbitMQSource source;
 
@@ -120,7 +141,11 @@ public class RabbitMQSource extends PushSource<byte[]> {
             Map<String, String> pulsarProperties = new HashMap<>();
             pulsarProperties.put("__rabbitmq_consumer_tag", consumerTag);
             pulsarProperties.put("__rabbitmq_queue_name", queueName);
-            source.consume(new RabbitMQRecord(Optional.ofNullable(envelope.getRoutingKey()), body, () -> {
+            String routingKey = envelope.getRoutingKey();
+            if (routingKey != null) {
+                pulsarProperties.put("__rabbitmq_routing_key", routingKey);
+            }
+            source.consume(new RabbitMQRecord(Optional.ofNullable(mapMessageKey(routingKey)), body, () -> {
                 // acknowledge this delivery tag to RabbitMQ
                 try {
                     this.getChannel().basicAck(deliveryTag, false);
