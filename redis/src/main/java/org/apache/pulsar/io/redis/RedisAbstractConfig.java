@@ -44,7 +44,8 @@ public class RedisAbstractConfig implements Serializable {
     @FieldDoc(
         required = true,
         defaultValue = "",
-        help = "A comma separated list of Redis hosts to connect to")
+        help = "A comma separated list of Redis hosts to connect to. In Standalone mode exactly one host "
+            + "must be given; in Cluster mode the hosts are used as seed nodes to discover the cluster topology")
     private String redisHosts;
 
     @FieldDoc(
@@ -143,6 +144,10 @@ public class RedisAbstractConfig implements Serializable {
 
     public void validate() {
         Preconditions.checkNotNull(clientMode, "clientMode property not set.");
+        Preconditions.checkArgument(!ClientMode.STANDALONE.name().equalsIgnoreCase(clientMode)
+                || StringUtils.isBlank(redisHosts) || getHostAndPorts().size() == 1,
+            "Standalone clientMode connects to a single Redis host, but redisHosts lists several: %s. "
+                + "Set clientMode to Cluster to connect to a Redis cluster.", redisHosts);
         Preconditions.checkArgument(redisTlsVerifyPeer != null, "redisTlsVerifyPeer property not set.");
         try {
             SslVerifyMode.valueOf(redisTlsVerifyPeer.toUpperCase(Locale.ROOT));

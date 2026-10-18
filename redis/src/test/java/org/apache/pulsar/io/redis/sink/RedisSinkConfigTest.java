@@ -120,6 +120,40 @@ public class RedisSinkConfigTest {
         config.validate();
     }
 
+    @Test(expectedExceptions = IllegalArgumentException.class,
+        expectedExceptionsMessageRegExp = "Standalone clientMode connects to a single Redis host.*")
+    public final void standaloneWithMultipleHostsFailsValidateTest() throws IOException {
+        Map<String, Object> map = new HashMap<String, Object>();
+        map.put("redisHosts", "localhost:6379,localhost:6380");
+        map.put("clientMode", "Standalone");
+
+        SinkContext sinkContext = Mockito.mock(SinkContext.class);
+        RedisSinkConfig config = RedisSinkConfig.load(map, sinkContext);
+        config.validate();
+    }
+
+    @Test(expectedExceptions = IllegalArgumentException.class,
+        expectedExceptionsMessageRegExp = "Standalone clientMode connects to a single Redis host.*")
+    public final void defaultClientModeWithMultipleHostsFailsValidateTest() throws IOException {
+        Map<String, Object> map = new HashMap<String, Object>();
+        map.put("redisHosts", "localhost:6379,localhost:6380");
+
+        SinkContext sinkContext = Mockito.mock(SinkContext.class);
+        RedisSinkConfig config = RedisSinkConfig.load(map, sinkContext);
+        config.validate();
+    }
+
+    @Test
+    public final void clusterWithMultipleHostsValidateTest() throws IOException {
+        Map<String, Object> map = new HashMap<String, Object>();
+        map.put("redisHosts", "localhost:6379,localhost:6380");
+        map.put("clientMode", "Cluster");
+
+        SinkContext sinkContext = Mockito.mock(SinkContext.class);
+        RedisSinkConfig config = RedisSinkConfig.load(map, sinkContext);
+        config.validate();
+    }
+
     @Test
     public final void defaultTlsTrustFieldsTest() throws IOException {
         Map<String, Object> map = new HashMap<String, Object>();
