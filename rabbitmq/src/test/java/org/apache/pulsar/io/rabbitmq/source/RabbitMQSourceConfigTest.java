@@ -183,6 +183,32 @@ public class RabbitMQSourceConfigTest {
         config.validate();
     }
 
+    @Test(expectedExceptions = IllegalArgumentException.class,
+            expectedExceptionsMessageRegExp = "Invalid messageKeyRules replacement.*")
+    public final void invalidMessageKeyGroupReferenceTest() throws IOException {
+        RabbitMQSourceConfig.MessageKeyRule rule = new RabbitMQSourceConfig.MessageKeyRule();
+        rule.setRegex("(foo)\\.(bar)");
+        rule.setReplacement("$3");
+        validConfig().setMessageKeyRules(Collections.singletonList(rule)).validate();
+    }
+
+    @Test(expectedExceptions = IllegalArgumentException.class,
+            expectedExceptionsMessageRegExp = "Invalid messageKeyRules replacement.*")
+    public final void invalidMessageKeyNamedGroupReferenceTest() throws IOException {
+        RabbitMQSourceConfig.MessageKeyRule rule = new RabbitMQSourceConfig.MessageKeyRule();
+        rule.setRegex("(?<name>foo)");
+        rule.setReplacement("${missing}");
+        validConfig().setMessageKeyRules(Collections.singletonList(rule)).validate();
+    }
+
+    @Test
+    public final void validMessageKeyGroupReferencesTest() throws IOException {
+        RabbitMQSourceConfig.MessageKeyRule rule = new RabbitMQSourceConfig.MessageKeyRule();
+        rule.setRegex("(?<name>foo)\\.(bar)");
+        rule.setReplacement("${name}-$2-\\$");
+        validConfig().setMessageKeyRules(Collections.singletonList(rule)).validate();
+    }
+
     @Test
     public final void emptyQueueNameForNonPassiveDeclarationValidateTest() throws IOException {
         RabbitMQSourceConfig config = validConfig()

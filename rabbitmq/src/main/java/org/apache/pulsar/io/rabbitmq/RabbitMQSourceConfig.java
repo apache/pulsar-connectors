@@ -27,6 +27,7 @@ import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
@@ -135,8 +136,19 @@ public class RabbitMQSourceConfig extends RabbitMQAbstractConfig implements Seri
         Preconditions.checkNotNull(messageKeyRules, "messageKeyRules must not be null.");
         for (MessageKeyRule rule : messageKeyRules) {
             Preconditions.checkNotNull(rule, "messageKeyRules must not contain null entries.");
-            Pattern.compile(Preconditions.checkNotNull(rule.getRegex(), "messageKeyRules regex must not be null."));
-            Preconditions.checkNotNull(rule.getReplacement(), "messageKeyRules replacement must not be null.");
+            String regex = Preconditions.checkNotNull(rule.getRegex(), "messageKeyRules regex must not be null.");
+            String replacement = Preconditions.checkNotNull(rule.getReplacement(),
+                    "messageKeyRules replacement must not be null.");
+            Pattern.compile(regex);
+
+            // The empty alternative lets Java validate replacement references even when the rule has no sample match.
+            Matcher matcher = Pattern.compile("(?:)|" + regex).matcher("");
+            matcher.matches();
+            try {
+                matcher.appendReplacement(new StringBuilder(), replacement);
+            } catch (IllegalArgumentException | IndexOutOfBoundsException e) {
+                throw new IllegalArgumentException("Invalid messageKeyRules replacement for regex: " + regex, e);
+            }
         }
     }
 }
