@@ -121,6 +121,7 @@ public class RabbitMQSourceTest {
         expectedMessageKeys.put("dynamic.second.item.1234", "item:1234");
         expectedMessageKeys.put("ab", "X");
         expectedMessageKeys.put("foo.bar", "[bar]");
+        expectedMessageKeys.put("foo.", "");
         expectedMessageKeys.put("other.key", "other.key");
 
         ConnectionFactory factory = new ConnectionFactory();
@@ -151,10 +152,14 @@ public class RabbitMQSourceTest {
             Map<String, String> alternationRule = new HashMap<>();
             alternationRule.put("regex", "a|ab");
             alternationRule.put("replacement", "X");
+            Map<String, String> emptyKeyRule = new HashMap<>();
+            emptyKeyRule.put("regex", "(foo)\\.(\\d*)");
+            emptyKeyRule.put("replacement", "$2");
             Map<String, String> captureRule = new HashMap<>();
             captureRule.put("regex", "(foo)\\.(.*?)");
             captureRule.put("replacement", "[$2]");
-            configs.put("messageKeyRules", Arrays.asList(staticRule, dynamicRule, alternationRule, captureRule));
+            configs.put("messageKeyRules", Arrays.asList(staticRule, dynamicRule, alternationRule, emptyKeyRule,
+                    captureRule));
 
             // rabbitmq service may need time to initialize
             Awaitility.await().ignoreExceptions().pollDelay(Duration.ofSeconds(1))

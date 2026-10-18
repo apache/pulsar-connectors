@@ -104,7 +104,8 @@ public class RabbitMQSourceConfig extends RabbitMQAbstractConfig implements Seri
             required = false,
             defaultValue = "",
             help = "Ordered regex rules for the Pulsar message key. The first full routing-key match wins; "
-                    + "replacement uses Java regex group references. Unmatched keys are kept unchanged.")
+                    + "replacement uses Java regex group references. An empty result produces an empty message key. "
+                    + "Unmatched routing keys are kept unchanged.")
     private List<MessageKeyRule> messageKeyRules = new ArrayList<>();
 
     @Data
