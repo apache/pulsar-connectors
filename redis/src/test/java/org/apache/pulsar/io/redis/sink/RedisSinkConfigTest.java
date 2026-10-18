@@ -383,8 +383,46 @@ public class RedisSinkConfigTest {
         RedisAbstractConfig.ClientMode.valueOf(config.getClientMode().toUpperCase());
     }
 
+    @Test(expectedExceptions = IllegalArgumentException.class,
+        expectedExceptionsMessageRegExp = "Redis Cluster only supports database 0, but redisDatabase is set to 1.*")
+    public final void clusterWithNonZeroDatabaseFailsValidateTest() throws IOException {
+        Map<String, Object> map = new HashMap<String, Object>();
+        map.put("redisHosts", "localhost:6379");
+        map.put("redisDatabase", "1");
+        map.put("clientMode", "Cluster");
+
+        SinkContext sinkContext = Mockito.mock(SinkContext.class);
+        RedisSinkConfig config = RedisSinkConfig.load(map, sinkContext);
+        config.validate();
+    }
+
+    @Test
+    public final void clusterWithDatabaseZeroValidateTest() throws IOException {
+        Map<String, Object> map = new HashMap<String, Object>();
+        map.put("redisHosts", "localhost:6379");
+        map.put("redisDatabase", "0");
+        map.put("clientMode", "Cluster");
+
+        SinkContext sinkContext = Mockito.mock(SinkContext.class);
+        RedisSinkConfig config = RedisSinkConfig.load(map, sinkContext);
+        config.validate();
+    }
+
+    @Test
+    public final void standaloneWithNonZeroDatabaseValidateTest() throws IOException {
+        Map<String, Object> map = new HashMap<String, Object>();
+        map.put("redisHosts", "localhost:6379");
+        map.put("redisDatabase", "1");
+        map.put("clientMode", "Standalone");
+
+        SinkContext sinkContext = Mockito.mock(SinkContext.class);
+        RedisSinkConfig config = RedisSinkConfig.load(map, sinkContext);
+        config.validate();
+    }
+
     private File getFile(String name) {
         ClassLoader classLoader = getClass().getClassLoader();
         return new File(classLoader.getResource(name).getFile());
     }
+
 }
