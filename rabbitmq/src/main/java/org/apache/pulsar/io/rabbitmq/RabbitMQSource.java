@@ -25,8 +25,9 @@ import com.rabbitmq.client.ConnectionFactory;
 import com.rabbitmq.client.DefaultConsumer;
 import com.rabbitmq.client.Envelope;
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.regex.Matcher;
@@ -55,8 +56,10 @@ public class RabbitMQSource extends PushSource<byte[]> {
     private Connection rabbitMQConnection;
     private Channel rabbitMQChannel;
     private RabbitMQSourceConfig rabbitMQSourceConfig;
-    private final Map<Pattern, String> messageKeyRules = new LinkedHashMap<>();
+    private final List<MessageKeyRule> messageKeyRules = new ArrayList<>();
     private String queueName;
+
+    private record MessageKeyRule(Pattern pattern, String replacement) {}
 
     @Override
     public void open(Map<String, Object> config, SourceContext sourceContext) throws Exception {
@@ -64,7 +67,7 @@ public class RabbitMQSource extends PushSource<byte[]> {
         rabbitMQSourceConfig.validate();
         messageKeyRules.clear();
         for (RabbitMQSourceConfig.MessageKeyRule rule : rabbitMQSourceConfig.getMessageKeyRules()) {
-            messageKeyRules.put(Pattern.compile(rule.getRegex()), rule.getReplacement());
+            messageKeyRules.add(new MessageKeyRule(Pattern.compile(rule.getRegex()), rule.getReplacement()));
         }
 
         ConnectionFactory connectionFactory = rabbitMQSourceConfig.createConnectionFactory();
@@ -117,11 +120,11 @@ public class RabbitMQSource extends PushSource<byte[]> {
         if (routingKey == null) {
             return null;
         }
-        for (Map.Entry<Pattern, String> rule : messageKeyRules.entrySet()) {
-            Matcher matcher = rule.getKey().matcher(routingKey);
+        for (MessageKeyRule rule : messageKeyRules) {
+            Matcher matcher = rule.pattern().matcher(routingKey);
             if (matcher.matches()) {
                 StringBuilder key = new StringBuilder();
-                matcher.appendReplacement(key, rule.getValue());
+                matcher.appendReplacement(key, rule.replacement());
                 return key.toString();
             }
         }
