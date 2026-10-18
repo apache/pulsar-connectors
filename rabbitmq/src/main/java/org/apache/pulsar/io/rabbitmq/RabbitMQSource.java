@@ -120,7 +120,9 @@ public class RabbitMQSource extends PushSource<byte[]> {
         for (Map.Entry<Pattern, String> rule : messageKeyRules.entrySet()) {
             Matcher matcher = rule.getKey().matcher(routingKey);
             if (matcher.matches()) {
-                return matcher.replaceFirst(rule.getValue());
+                StringBuilder key = new StringBuilder();
+                matcher.appendReplacement(key, rule.getValue());
+                return key.toString();
             }
         }
         return routingKey;
