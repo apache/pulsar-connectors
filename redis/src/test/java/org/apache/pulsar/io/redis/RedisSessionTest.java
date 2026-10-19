@@ -25,11 +25,13 @@ import static org.testng.Assert.assertNull;
 import static org.testng.Assert.assertTrue;
 import static org.testng.Assert.expectThrows;
 import io.lettuce.core.RedisURI;
+import io.lettuce.core.SocketOptions;
 import io.lettuce.core.SslOptions;
 import io.lettuce.core.SslVerifyMode;
 import java.io.File;
 import java.io.IOException;
 import java.security.KeyStoreException;
+import java.time.Duration;
 import java.util.List;
 import org.apache.pulsar.io.redis.sink.RedisSinkConfig;
 import org.testng.annotations.Test;
@@ -253,6 +255,36 @@ public class RedisSessionTest {
 
         SslOptions sslOptions = RedisSession.buildSslOptions(config);
         assertNull(sslOptions.getTruststore());
+    }
+
+    @Test
+    public final void clusterModeAppliesSocketOptionsTest() {
+        RedisSinkConfig config = socketOptionsConfig();
+
+        SocketOptions socketOptions = RedisSession.clusterClientOptions(config).getSocketOptions();
+        assertEquals(socketOptions.getConnectTimeout(), Duration.ofMillis(2500));
+        assertTrue(socketOptions.isTcpNoDelay());
+        assertTrue(socketOptions.isKeepAlive());
+    }
+
+    @Test
+    public final void standaloneModeAppliesSocketOptionsTest() {
+        RedisSinkConfig config = socketOptionsConfig();
+
+        SocketOptions socketOptions = RedisSession.standaloneClientOptions(config).getSocketOptions();
+        assertEquals(socketOptions.getConnectTimeout(), Duration.ofMillis(2500));
+        assertTrue(socketOptions.isTcpNoDelay());
+        assertTrue(socketOptions.isKeepAlive());
+    }
+
+    private static RedisSinkConfig socketOptionsConfig() {
+        RedisSinkConfig config = new RedisSinkConfig();
+        config.setRedisHosts("localhost:6379");
+        // Non-default values, so a builder that drops them fails the assertions
+        config.setConnectTimeout(2500L);
+        config.setTcpNoDelay(true);
+        config.setKeepAlive(true);
+        return config;
     }
 
     private static RedisURI buildSingleUri(RedisSinkConfig config) {
