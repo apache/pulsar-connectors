@@ -22,6 +22,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import java.util.HashMap;
 import java.util.Map;
+import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
 /**
@@ -176,6 +177,149 @@ public class AeronSourceConfigTest {
         assertThatThrownBy(() -> AeronSourceConfig.load(map).validate())
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("aeronDirectoryName must be set");
+    }
+
+    private static Map<String, Object> archiveMap() {
+        Map<String, Object> map = validMap();
+        map.put("mode", "archive");
+        map.put("archiveControlRequestChannel", "aeron:udp?endpoint=localhost:8010");
+        map.put("archiveControlResponseChannel", "aeron:udp?endpoint=localhost:0");
+        map.put("replayChannel", "aeron:ipc");
+        map.put("replayStreamId", 2001);
+        return map;
+    }
+
+    @Test
+    public void testDefaultModeIsTransport() throws Exception {
+        AeronSourceConfig config = AeronSourceConfig.load(validMap());
+
+        assertThat(config.getMode()).isEqualTo(AeronSourceConfig.MODE_TRANSPORT);
+        assertThat(config.isArchiveMode()).isFalse();
+        config.validate();
+    }
+
+    @Test
+    public void testArchiveModeLoadsAndValidates() throws Exception {
+        AeronSourceConfig config = AeronSourceConfig.load(archiveMap());
+        config.validate();
+
+        assertThat(config.isArchiveMode()).isTrue();
+        assertThat(config.getReplayStreamId()).isEqualTo(2001);
+        assertThat(config.getRecordingId()).isEqualTo(-1L);
+        assertThat(config.getStartPosition()).isEqualTo(-1L);
+    }
+
+    @Test
+    public void testArchiveModeIsCaseInsensitive() throws Exception {
+        Map<String, Object> map = archiveMap();
+        map.put("mode", "ARCHIVE");
+
+        AeronSourceConfig config = AeronSourceConfig.load(map);
+        config.validate();
+
+        assertThat(config.isArchiveMode()).isTrue();
+    }
+
+    @Test
+    public void testUnknownModeIsRejected() throws Exception {
+        Map<String, Object> map = validMap();
+        map.put("mode", "replay");
+
+        assertThatThrownBy(() -> AeronSourceConfig.load(map).validate())
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("mode must be one of");
+    }
+
+    @DataProvider(name = "requiredArchiveFields")
+    public static Object[][] requiredArchiveFields() {
+        return new Object[][]{
+                {"archiveControlRequestChannel"},
+                {"archiveControlResponseChannel"},
+                {"replayChannel"},
+                {"replayStreamId"},
+        };
+    }
+
+    @Test(dataProvider = "requiredArchiveFields")
+    public void testArchiveModeRequiresItsSettings(String field) throws Exception {
+        Map<String, Object> map = archiveMap();
+        map.remove(field);
+
+        assertThatThrownBy(() -> AeronSourceConfig.load(map).validate())
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(field);
+    }
+
+    @DataProvider(name = "archiveOnlyFields")
+    public static Object[][] archiveOnlyFields() {
+        return new Object[][]{
+                {"archiveControlRequestChannel", "aeron:udp?endpoint=localhost:8010"},
+                {"archiveControlResponseChannel", "aeron:udp?endpoint=localhost:0"},
+                {"replayChannel", "aeron:ipc"},
+                {"replayStreamId", 2001},
+                {"recordingId", 7L},
+                {"startPosition", 128L},
+                {"resetCheckpoint", true},
+                {"checkpointEveryRecords", 50},
+        };
+    }
+
+    @Test(dataProvider = "archiveOnlyFields")
+    public void testArchiveSettingsAreRejectedInTransportMode(String field, Object value)
+            throws Exception {
+        // Rejected rather than ignored: a config that looks set up for lossless replay but runs
+        // at-most-once is the worst outcome available, so it must fail at open() instead.
+        Map<String, Object> map = validMap();
+        map.put(field, value);
+
+        assertThatThrownBy(() -> AeronSourceConfig.load(map).validate())
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(field)
+                .hasMessageContaining("only apply when mode is 'archive'");
+    }
+
+    @Test
+    public void testResetCheckpointDefaultsOff() throws Exception {
+        // Default matters: this flag re-ingests the whole recording every restart if left on.
+        AeronSourceConfig config = AeronSourceConfig.load(archiveMap());
+        config.validate();
+
+        assertThat(config.isResetCheckpoint()).isFalse();
+        assertThat(config.getCheckpointEveryRecords()).isEqualTo(1000);
+    }
+
+    @Test
+    public void testNonPositiveCheckpointIntervalIsRejected() throws Exception {
+        Map<String, Object> map = archiveMap();
+        map.put("checkpointEveryRecords", 0);
+
+        assertThatThrownBy(() -> AeronSourceConfig.load(map).validate())
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("checkpointEveryRecords must be positive");
+    }
+
+    @Test
+    public void testZeroReplayStreamIdIsRejected() throws Exception {
+        Map<String, Object> map = archiveMap();
+        map.put("replayStreamId", 0);
+
+        assertThatThrownBy(() -> AeronSourceConfig.load(map).validate())
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("replayStreamId must not be 0");
+    }
+
+    @Test
+    public void testReplayCollidingWithTheSubscriptionIsRejected() throws Exception {
+        // Same channel and same stream id would make the replay collide with the stream being
+        // replayed from.
+        Map<String, Object> map = archiveMap();
+        map.put("channel", "aeron:ipc");
+        map.put("replayChannel", "aeron:ipc");
+        map.put("replayStreamId", map.get("streamId"));
+
+        assertThatThrownBy(() -> AeronSourceConfig.load(map).validate())
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("replayStreamId must differ from streamId");
     }
 
     @Test
