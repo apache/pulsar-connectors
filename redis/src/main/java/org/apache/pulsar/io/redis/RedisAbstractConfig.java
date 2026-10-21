@@ -65,7 +65,8 @@ public class RedisAbstractConfig implements Serializable {
     @FieldDoc(
         required = true,
         defaultValue = "0",
-        help = "The Redis database to connect to")
+        help = "The Redis database to connect to. Only applies to Standalone mode; Redis Cluster supports only "
+            + "database 0, so it must be left at 0 when clientMode is Cluster")
     private int redisDatabase = 0;
 
     @FieldDoc(
@@ -157,6 +158,9 @@ public class RedisAbstractConfig implements Serializable {
             Preconditions.checkArgument(truststore.exists() && truststore.canRead(),
                 "redisTlsTrustStorePath does not exist or is not readable: " + redisTlsTrustStorePath);
         }
+        Preconditions.checkArgument(!ClientMode.CLUSTER.name().equalsIgnoreCase(clientMode) || redisDatabase == 0,
+            "Redis Cluster only supports database 0, but redisDatabase is set to %s. "
+                + "Remove redisDatabase or set it to 0 when clientMode is Cluster.", redisDatabase);
     }
 
     public enum ClientMode {
