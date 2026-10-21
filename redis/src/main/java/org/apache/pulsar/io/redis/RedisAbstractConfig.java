@@ -145,7 +145,7 @@ public class RedisAbstractConfig implements Serializable {
     public void validate() {
         Preconditions.checkNotNull(clientMode, "clientMode property not set.");
         Preconditions.checkArgument(!ClientMode.STANDALONE.name().equalsIgnoreCase(clientMode)
-                || StringUtils.isBlank(redisHosts) || getHostAndPorts().size() == 1,
+                || getHostAndPorts().size() <= 1,
             "Standalone clientMode connects to a single Redis host, but redisHosts lists several: %s. "
                 + "Set clientMode to Cluster to connect to a Redis cluster.", redisHosts);
         Preconditions.checkArgument(redisTlsVerifyPeer != null, "redisTlsVerifyPeer property not set.");
@@ -173,7 +173,11 @@ public class RedisAbstractConfig implements Serializable {
         List<HostAndPort> hostAndPorts = Lists.newArrayList();
         String[] hosts = StringUtils.split(redisHosts, ",");
         for (String host : hosts) {
-            HostAndPort hostAndPort = HostAndPort.fromString(host);
+            // skip blank entries such as the one left by a trailing ", "
+            if (StringUtils.isBlank(host)) {
+                continue;
+            }
+            HostAndPort hostAndPort = HostAndPort.fromString(host.trim());
             hostAndPorts.add(hostAndPort);
         }
         return hostAndPorts;
