@@ -21,9 +21,11 @@ package org.apache.pulsar.io.redis.sink;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertNotNull;
 import static org.testng.Assert.assertNull;
+import com.google.common.net.HostAndPort;
 import java.io.File;
 import java.io.IOException;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import org.apache.pulsar.io.core.SinkContext;
 import org.apache.pulsar.io.redis.RedisAbstractConfig;
@@ -118,6 +120,65 @@ public class RedisSinkConfigTest {
         SinkContext sinkContext = Mockito.mock(SinkContext.class);
         RedisSinkConfig config = RedisSinkConfig.load(map, sinkContext);
         config.validate();
+    }
+
+    @Test(expectedExceptions = IllegalArgumentException.class,
+        expectedExceptionsMessageRegExp = "Standalone clientMode connects to a single Redis host.*")
+    public final void standaloneWithMultipleHostsFailsValidateTest() throws IOException {
+        Map<String, Object> map = new HashMap<String, Object>();
+        map.put("redisHosts", "localhost:6379,localhost:6380");
+        map.put("clientMode", "Standalone");
+
+        SinkContext sinkContext = Mockito.mock(SinkContext.class);
+        RedisSinkConfig config = RedisSinkConfig.load(map, sinkContext);
+        config.validate();
+    }
+
+    @Test(expectedExceptions = IllegalArgumentException.class,
+        expectedExceptionsMessageRegExp = "Standalone clientMode connects to a single Redis host.*")
+    public final void defaultClientModeWithMultipleHostsFailsValidateTest() throws IOException {
+        Map<String, Object> map = new HashMap<String, Object>();
+        map.put("redisHosts", "localhost:6379,localhost:6380");
+
+        SinkContext sinkContext = Mockito.mock(SinkContext.class);
+        RedisSinkConfig config = RedisSinkConfig.load(map, sinkContext);
+        config.validate();
+    }
+
+    @Test
+    public final void clusterWithMultipleHostsValidateTest() throws IOException {
+        Map<String, Object> map = new HashMap<String, Object>();
+        map.put("redisHosts", "localhost:6379,localhost:6380");
+        map.put("clientMode", "Cluster");
+
+        SinkContext sinkContext = Mockito.mock(SinkContext.class);
+        RedisSinkConfig config = RedisSinkConfig.load(map, sinkContext);
+        config.validate();
+    }
+
+    @Test
+    public final void standaloneWithTrailingSeparatorValidateTest() throws IOException {
+        Map<String, Object> map = new HashMap<String, Object>();
+        map.put("redisHosts", "localhost:6379, ");
+        map.put("clientMode", "Standalone");
+
+        SinkContext sinkContext = Mockito.mock(SinkContext.class);
+        RedisSinkConfig config = RedisSinkConfig.load(map, sinkContext);
+        config.validate();
+        assertEquals(config.getHostAndPorts(), List.of(HostAndPort.fromParts("localhost", 6379)));
+    }
+
+    @Test
+    public final void hostAndPortsTrimsWhitespaceTest() throws IOException {
+        Map<String, Object> map = new HashMap<String, Object>();
+        map.put("redisHosts", " host1:6379 , host2:6380,, ");
+        map.put("clientMode", "Cluster");
+
+        SinkContext sinkContext = Mockito.mock(SinkContext.class);
+        RedisSinkConfig config = RedisSinkConfig.load(map, sinkContext);
+        config.validate();
+        assertEquals(config.getHostAndPorts(),
+            List.of(HostAndPort.fromParts("host1", 6379), HostAndPort.fromParts("host2", 6380)));
     }
 
     @Test
