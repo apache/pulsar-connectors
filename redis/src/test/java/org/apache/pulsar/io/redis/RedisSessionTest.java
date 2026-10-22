@@ -263,7 +263,7 @@ public class RedisSessionTest {
 
         SocketOptions socketOptions = RedisSession.clusterClientOptions(config).getSocketOptions();
         assertEquals(socketOptions.getConnectTimeout(), Duration.ofMillis(2500));
-        assertTrue(socketOptions.isTcpNoDelay());
+        assertFalse(socketOptions.isTcpNoDelay());
         assertTrue(socketOptions.isKeepAlive());
     }
 
@@ -273,16 +273,17 @@ public class RedisSessionTest {
 
         SocketOptions socketOptions = RedisSession.standaloneClientOptions(config).getSocketOptions();
         assertEquals(socketOptions.getConnectTimeout(), Duration.ofMillis(2500));
-        assertTrue(socketOptions.isTcpNoDelay());
+        assertFalse(socketOptions.isTcpNoDelay());
         assertTrue(socketOptions.isKeepAlive());
     }
 
     private static RedisSinkConfig socketOptionsConfig() {
         RedisSinkConfig config = new RedisSinkConfig();
         config.setRedisHosts("localhost:6379");
-        // Non-default values, so a builder that drops them fails the assertions
+        // Lettuce defaults are a 10s timeout, tcpNoDelay=true and keepAlive=false, so each
+        // of these differs and a builder that drops the socket options fails every assertion
         config.setConnectTimeout(2500L);
-        config.setTcpNoDelay(true);
+        config.setTcpNoDelay(false);
         config.setKeepAlive(true);
         return config;
     }
