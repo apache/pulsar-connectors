@@ -91,6 +91,9 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
     // for flush
     private LinkedBlockingDeque<Record<T>> incomingList;
     private AtomicBoolean isFlushing;
+    // True while an on-demand flush is scheduled but has not started yet. Used to schedule at most
+    // one such flush at a time instead of one per write().
+    private final AtomicBoolean flushPending = new AtomicBoolean(false);
     private int batchSize;
     private int maxQueueSize;
     private volatile ScheduledExecutorService flushExecutor;
@@ -374,19 +377,32 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
         }
     }
 
+    /**
+     * Schedule an on-demand flush unless one is already pending. A pending flush has not started
+     * draining yet, so it also picks up the records queued after it was scheduled.
+     */
     private void scheduleFlush() {
         // close() may have shut the executor down, or cleared the field, since write() checked the
         // state. close() fails the queued records, so there is nothing left to flush then.
         ScheduledExecutorService executor = flushExecutor;
-        if (executor == null) {
+        if (executor == null || !flushPending.compareAndSet(false, true)) {
             return;
         }
         try {
-            executor.schedule(this::flush, 0, TimeUnit.MILLISECONDS);
+            executor.schedule(this::flushOnDemand, 0, TimeUnit.MILLISECONDS);
         } catch (RejectedExecutionException e) {
+            flushPending.set(false);
             // A no-op after close(), since fatal() only acts on an OPEN sink
             fatal(e);
         }
+    }
+
+    private void flushOnDemand() {
+        // Clear the flag before draining, so that a write() that lands after the drain schedules a
+        // new flush instead of relying on this one. The periodic flush leaves the flag alone:
+        // clearing it while an on-demand flush is still pending would let write() schedule another.
+        flushPending.set(false);
+        flush();
     }
 
     public String generateInsertQueryStatement() {

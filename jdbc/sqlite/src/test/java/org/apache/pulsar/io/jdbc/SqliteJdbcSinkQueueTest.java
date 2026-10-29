@@ -27,30 +27,47 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.withSettings;
+import com.google.common.collect.ImmutableMap;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Random;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.LinkedBlockingDeque;
+import java.util.concurrent.RunnableScheduledFuture;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import org.apache.commons.lang3.reflect.FieldUtils;
+import org.apache.pulsar.client.api.Message;
 import org.apache.pulsar.client.api.schema.GenericObject;
+import org.apache.pulsar.client.api.schema.GenericRecord;
+import org.apache.pulsar.client.api.schema.SchemaDefinition;
+import org.apache.pulsar.client.impl.MessageImpl;
+import org.apache.pulsar.client.impl.schema.AutoConsumeSchema;
+import org.apache.pulsar.client.impl.schema.AvroSchema;
+import org.apache.pulsar.client.impl.schema.generic.GenericAvroSchema;
 import org.apache.pulsar.functions.api.Record;
+import org.apache.pulsar.functions.source.PulsarRecord;
 import org.apache.pulsar.io.core.SinkContext;
 import org.apache.pulsar.io.jdbc.SqliteJdbcSinkTest.Foo;
+import org.awaitility.Awaitility;
 import org.mockito.ArgumentCaptor;
 import org.testng.Assert;
 import org.testng.annotations.AfterMethod;
@@ -434,6 +451,97 @@ public class SqliteJdbcSinkQueueTest {
     }
 
     /**
+     * Test that write() does not schedule one flush per record while a flush is in progress. While
+     * the only flush thread is stuck, the executor queue must hold just the periodic flush and one
+     * pending on-demand flush, and that flush must drain everything written in the meantime.
+     */
+    @Test
+    public void testOnDemandFlushesCoalescedWhileFlushIsBlocked() throws Exception {
+        final int recordCount = 2000;
+        Map<String, Object> conf = createConfig(1, -1);
+        // Schedule the periodic flush, with an interval that does not elapse during the test
+        conf.put("timeoutMs", (int) TimeUnit.MINUTES.toMillis(10));
+        openSink(conf, null);
+        blockFlushes(0);
+        ScheduledThreadPoolExecutor flushExecutor =
+                (ScheduledThreadPoolExecutor) FieldUtils.readField(sink, "flushExecutor", true);
+        AtomicLong acked = new AtomicLong();
+        AtomicLong failed = new AtomicLong();
+        Record<GenericObject> record = createCountingRecord(acked, failed);
+
+        // The first write starts a flush that gets stuck, holding the only flush thread
+        sink.write(record);
+        Assert.assertTrue(flushBlocked.await(10, TimeUnit.SECONDS));
+        for (int i = 1; i < recordCount; i++) {
+            sink.write(record);
+        }
+        List<Runnable> queuedTasks = new ArrayList<>(flushExecutor.getQueue());
+        long periodicTasks = queuedTasks.stream()
+                .filter(task -> ((RunnableScheduledFuture<?>) task).isPeriodic())
+                .count();
+        Assert.assertEquals(periodicTasks, 1L);
+        Assert.assertEquals(queuedTasks.size() - periodicTasks, 1L, "Expected one pending on-demand flush");
+
+        releaseFlush.countDown();
+        Awaitility.await().atMost(10, TimeUnit.SECONDS).untilAsserted(() ->
+                Assert.assertEquals(acked.get(), (long) recordCount));
+        Assert.assertEquals(failed.get(), 0L);
+        Assert.assertTrue(queue().isEmpty());
+    }
+
+    @DataProvider(name = "maxQueueSizes")
+    public Object[] maxQueueSizes() {
+        // Unbounded, and two batches, so that write() regularly waits for space
+        return new Object[] {-1, 10};
+    }
+
+    /**
+     * Test that coalescing on-demand flushes never leaves a full batch behind. Without a periodic
+     * flush, records only leave the queue through flushes scheduled by write(), so a lost wake-up
+     * would strand a full batch. Writes are paced irregularly so that they land at different points
+     * of a flush in progress. After every burst, the queue must drain below batchSize with all the
+     * other records acked (a partial batch legitimately waits for the next write).
+     */
+    @Test(dataProvider = "maxQueueSizes")
+    public void testNoFlushLostWhenWritesRaceWithFlush(int maxQueueSize) throws Exception {
+        final int batchSize = 5;
+        openSink(createConfig(batchSize, maxQueueSize), null);
+        mockInsertStatement(() -> spin(ThreadLocalRandom.current().nextInt(50)));
+        long seed = System.nanoTime();
+        Random random = new Random(seed);
+        AtomicLong acked = new AtomicLong();
+        AtomicLong failed = new AtomicLong();
+        Record<GenericObject> record = createCountingRecord(acked, failed);
+
+        long written = 0;
+        for (int burst = 0; burst < 50; burst++) {
+            int records = 1 + random.nextInt(8 * batchSize);
+            for (int i = 0; i < records; i++) {
+                sink.write(record);
+                if (random.nextInt(4) == 0) {
+                    spin(random.nextInt(100));
+                }
+            }
+            written += records;
+            long expected = written;
+            Awaitility.await()
+                    .pollDelay(Duration.ZERO)
+                    .pollInterval(Duration.ofMillis(1))
+                    .atMost(10, TimeUnit.SECONDS)
+                    .untilAsserted(() -> {
+                        // Read acked first: the sum can only reach the total written once no record
+                        // is being flushed and the queue has stopped changing
+                        long ackedSoFar = acked.get();
+                        int queued = queue().size();
+                        Assert.assertTrue(queued < batchSize, "A full batch was left unflushed, queue size: "
+                                + queued + ", seed: " + seed);
+                        Assert.assertEquals(ackedSoFar + queued, expected);
+                    });
+        }
+        Assert.assertEquals(failed.get(), 0L);
+    }
+
+    /**
      * Test that a maxQueueSize smaller than batchSize is raised to batchSize, so that a full batch
      * fits in the queue and triggers a flush.
      */
@@ -676,14 +784,29 @@ public class SqliteJdbcSinkQueueTest {
                 .submit(() -> { }).get(10, TimeUnit.SECONDS);
     }
 
+    private interface StatementAction {
+        void run() throws Exception;
+    }
+
+    /**
+     * Replace the insert statement with a mock that runs {@code onExecute} on each execute().
+     */
+    private void mockInsertStatement(StatementAction onExecute) throws Exception {
+        PreparedStatement statement = mock(PreparedStatement.class);
+        when(statement.execute()).thenAnswer(invocation -> {
+            onExecute.run();
+            return false;
+        });
+        FieldUtils.writeField(sink, "insertStatement", statement, true);
+    }
+
     /**
      * Replace the insert statement with a mock. Each execute() counts down flushBlocked and waits
      * for releaseFlush, then the first {@code failures} calls throw.
      */
     private void blockFlushes(int failures) throws Exception {
         AtomicInteger remainingFailures = new AtomicInteger(failures);
-        PreparedStatement statement = mock(PreparedStatement.class);
-        when(statement.execute()).thenAnswer(invocation -> {
+        mockInsertStatement(() -> {
             flushBlocked.countDown();
             if (!releaseFlush.await(30, TimeUnit.SECONDS)) {
                 throw new TimeoutException("Flush was never released");
@@ -691,9 +814,7 @@ public class SqliteJdbcSinkQueueTest {
             if (remainingFailures.getAndDecrement() > 0) {
                 throw new SQLException("Simulated database failure");
             }
-            return false;
         });
-        FieldUtils.writeField(sink, "insertStatement", statement, true);
     }
 
     /**
@@ -720,6 +841,30 @@ public class SqliteJdbcSinkQueueTest {
             throw error;
         }).when(throwing).fail();
         return throwing;
+    }
+
+    /**
+     * A record that counts its acks and fails. Tests that only count flushed records can write the
+     * same instance many times, which is much cheaper than building one record per write.
+     */
+    @SuppressWarnings("unchecked")
+    private static Record<GenericObject> createCountingRecord(AtomicLong acked, AtomicLong failed) {
+        AvroSchema<Foo> schema = AvroSchema.of(SchemaDefinition.<Foo>builder()
+                .withPojo(Foo.class).withAlwaysAllowNull(true).build());
+        AutoConsumeSchema autoConsumeSchema = new AutoConsumeSchema();
+        autoConsumeSchema.setSchema(schema);
+        GenericAvroSchema genericAvroSchema = new GenericAvroSchema(schema.getSchemaInfo());
+        Message<GenericRecord> message = mock(MessageImpl.class, withSettings().stubOnly());
+        when(message.getValue()).thenReturn(genericAvroSchema.decode(schema.encode(new Foo("f1", "f2", 1))));
+        when(message.getProperties()).thenReturn(ImmutableMap.of("ACTION", "INSERT"));
+        Record<? extends GenericObject> record = PulsarRecord.<GenericRecord>builder()
+                .message(message)
+                .topicName("fake_topic_name")
+                .schema(autoConsumeSchema)
+                .ackFunction(acked::incrementAndGet)
+                .failFunction(failed::incrementAndGet)
+                .build();
+        return (Record<GenericObject>) record;
     }
 
     /**
@@ -758,6 +903,13 @@ public class SqliteJdbcSinkQueueTest {
                 throw new TimeoutException(thread.getName() + " did not block, state: " + thread.getState());
             }
             Thread.sleep(1);
+        }
+    }
+
+    private static void spin(long micros) {
+        long deadline = System.nanoTime() + TimeUnit.MICROSECONDS.toNanos(micros);
+        while (System.nanoTime() < deadline) {
+            Thread.onSpinWait();
         }
     }
 }
