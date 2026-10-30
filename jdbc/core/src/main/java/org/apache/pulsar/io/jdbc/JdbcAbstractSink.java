@@ -159,7 +159,7 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
         flushExecutor = Executors.newScheduledThreadPool(1);
         if (timeoutMs > 0) {
             scheduledFlushTask = flushExecutor.scheduleAtFixedRate(
-                    this::flush, timeoutMs, timeoutMs, TimeUnit.MILLISECONDS);
+                    this::flushOrFatal, timeoutMs, timeoutMs, TimeUnit.MILLISECONDS);
         }
     }
 
@@ -402,7 +402,23 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
         // new flush instead of relying on this one. The periodic flush leaves the flag alone:
         // clearing it while an on-demand flush is still pending would let write() schedule another.
         flushPending.set(false);
-        flush();
+        flushOrFatal();
+    }
+
+    /**
+     * Run flush() as a task of the flush executor, reporting anything that escapes it through
+     * fatal(). An exception escaping a periodic task cancels it without notice, and the executor
+     * keeps the exception of an on-demand task in a Future that nobody reads. fatal() only acts on
+     * an OPEN sink, so an error that flush() already reported is not reported again, and fatal()
+     * cancelling the periodic task from inside it just stops further runs.
+     */
+    private void flushOrFatal() {
+        try {
+            flush();
+        } catch (Throwable t) {
+            log.error("Flush task failed with {}", t.toString(), t);
+            fatal(t);
+        }
     }
 
     public String generateInsertQueryStatement() {
@@ -553,24 +569,29 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
                     // under EFFECTIVELY_ONCE). Keep failing the other records and still roll back
                     // and call fatal(). e may itself have been thrown by fail() in executeBatch(),
                     // and a fail function may throw the same instance again, which
-                    // addSuppressed() rejects.
-                    for (Record<T> r : swapList) {
-                        try {
-                            r.fail();
-                        } catch (RuntimeException failEx) {
-                            if (failEx != e) {
-                                e.addSuppressed(failEx);
+                    // addSuppressed() rejects. The finally blocks also cover an Error from fail()
+                    // or rollback().
+                    try {
+                        for (Record<T> r : swapList) {
+                            try {
+                                r.fail();
+                            } catch (RuntimeException failEx) {
+                                if (failEx != e) {
+                                    e.addSuppressed(failEx);
+                                }
                             }
                         }
-                    }
-                    try {
-                        if (jdbcSinkConfig.isUseTransactions()) {
-                            connection.rollback();
+                    } finally {
+                        try {
+                            if (jdbcSinkConfig.isUseTransactions()) {
+                                connection.rollback();
+                            }
+                        } catch (Exception ex) {
+                            log.error("Failed to rollback transaction", ex);
+                        } finally {
+                            fatal(e);
                         }
-                    } catch (Exception ex) {
-                        log.error("Failed to rollback transaction", ex);
                     }
-                    fatal(e);
                     needAnotherRound = false;
                 }
             } while (needAnotherRound);
@@ -616,7 +637,12 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
     private void internalFlush(Deque<Record<T>> swapList) throws SQLException {
         if (jdbcSinkConfig.isUseTransactions()) {
             connection.commit();
-            swapList.forEach(Record::ack);
+            // Remove each record before acking it, so that if ack() throws, flush() fails only the
+            // records that were not acked yet
+            Record<T> record;
+            while ((record = swapList.pollFirst()) != null) {
+                record.ack();
+            }
         }
     }
 
