@@ -85,12 +85,6 @@ public class RedisSession {
         RedisSession redisSession;
         final RedisCodec<byte[], byte[]> codec = new ByteArrayCodec();
 
-        final SocketOptions socketOptions = SocketOptions.builder()
-            .tcpNoDelay(config.isTcpNoDelay())
-            .connectTimeout(Duration.ofMillis(config.getConnectTimeout()))
-            .keepAlive(config.isKeepAlive())
-            .build();
-
         final ClientMode clientMode;
         try {
             clientMode = ClientMode.valueOf(config.getClientMode().toUpperCase(Locale.ROOT));
@@ -100,28 +94,15 @@ public class RedisSession {
         }
 
         List<RedisURI> redisURIs = redisURIs(config.getHostAndPorts(), config);
-        final SslOptions sslOptions = buildSslOptions(config);
 
         if (clientMode == ClientMode.STANDALONE) {
-            ClientOptions.Builder clientOptions = ClientOptions.builder()
-                .socketOptions(socketOptions)
-                .sslOptions(sslOptions)
-                .requestQueueSize(config.getRequestQueue())
-                .autoReconnect(config.isAutoReconnect());
-
             final RedisClient client = RedisClient.create(redisURIs.get(0));
-            client.setOptions(clientOptions.build());
+            client.setOptions(standaloneClientOptions(config));
             final StatefulRedisConnection<byte[], byte[]> connection = client.connect(codec);
             redisSession = new RedisSession(client, connection, connection.async());
         } else if (clientMode == ClientMode.CLUSTER) {
-            ClusterClientOptions.Builder clientOptions = ClusterClientOptions.builder()
-                .socketOptions(socketOptions)
-                .sslOptions(sslOptions)
-                .requestQueueSize(config.getRequestQueue())
-                .autoReconnect(config.isAutoReconnect());
-
             final RedisClusterClient client = RedisClusterClient.create(redisURIs);
-            client.setOptions(clientOptions.build());
+            client.setOptions(clusterClientOptions(config));
 
             final StatefulRedisClusterConnection<byte[], byte[]> connection = client.connect(codec);
             redisSession = new RedisSession(client, connection, connection.async());
@@ -132,6 +113,34 @@ public class RedisSession {
         }
 
         return redisSession;
+    }
+
+    @VisibleForTesting
+    static ClientOptions standaloneClientOptions(RedisSinkConfig config) {
+        return ClientOptions.builder()
+            .socketOptions(socketOptions(config))
+            .sslOptions(buildSslOptions(config))
+            .requestQueueSize(config.getRequestQueue())
+            .autoReconnect(config.isAutoReconnect())
+            .build();
+    }
+
+    @VisibleForTesting
+    static ClusterClientOptions clusterClientOptions(RedisSinkConfig config) {
+        return ClusterClientOptions.builder()
+            .socketOptions(socketOptions(config))
+            .sslOptions(buildSslOptions(config))
+            .requestQueueSize(config.getRequestQueue())
+            .autoReconnect(config.isAutoReconnect())
+            .build();
+    }
+
+    private static SocketOptions socketOptions(RedisSinkConfig config) {
+        return SocketOptions.builder()
+            .tcpNoDelay(config.isTcpNoDelay())
+            .connectTimeout(Duration.ofMillis(config.getConnectTimeout()))
+            .keepAlive(config.isKeepAlive())
+            .build();
     }
 
     @VisibleForTesting
