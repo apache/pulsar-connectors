@@ -22,13 +22,22 @@ import static org.mockito.Mockito.mock;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertTrue;
+import static org.testng.Assert.fail;
+import com.github.dockerjava.api.model.ExposedPort;
+import com.github.dockerjava.api.model.PortBinding;
+import com.github.dockerjava.api.model.Ports;
 import com.hivemq.client.mqtt.MqttClient;
 import com.hivemq.client.mqtt.mqtt5.Mqtt5AsyncClient;
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.net.InetAddress;
+import java.net.ServerSocket;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -38,6 +47,7 @@ import org.apache.pulsar.functions.api.Record;
 import org.apache.pulsar.io.core.SinkContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.testcontainers.DockerClientFactory;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.utility.DockerImageName;
@@ -51,14 +61,20 @@ public class MqttSinkIntegrationTest {
 
     private static final int MQTT_PORT = 1883;
     private static final String TEST_TOPIC = "pulsar/mqtt/e2e";
+    private static final String RECONNECT_TEST_TOPIC = "pulsar/mqtt/e2e/reconnect";
     private static final DockerImageName MOSQUITTO_IMAGE = DockerImageName.parse("eclipse-mosquitto:2");
+
+    private final int brokerHostPort = findFreePort();
 
     private final GenericContainer<?> mqttContainer = new GenericContainer<>(MOSQUITTO_IMAGE)
             .withExposedPorts(MQTT_PORT)
             // Without an explicit wait strategy and startup timeout, a stalled image pull hangs
             // @BeforeClass with no bound, taking the whole CI job to its 45-minute limit.
             .waitingFor(Wait.forListeningPort())
-            .withStartupTimeout(Duration.ofMinutes(3));
+            .withStartupTimeout(Duration.ofMinutes(3))
+            .withCreateContainerCmdModifier(cmd -> Objects.requireNonNull(cmd.getHostConfig())
+                    .withPortBindings(new Ports(
+                            new PortBinding(Ports.Binding.bindPort(brokerHostPort), new ExposedPort(MQTT_PORT)))));
 
     @BeforeClass(alwaysRun = true)
     public void beforeClass() {
@@ -144,6 +160,68 @@ public class MqttSinkIntegrationTest {
         }
     }
 
+    @Test(timeOut = 120_000)
+    public void testReconnectAfterBrokerRestart() throws Exception {
+        Map<String, Object> config = baseSinkConfig(RECONNECT_TEST_TOPIC);
+        config.put("clientId", "mqtt-sink-e2e-reconnect-publisher");
+
+        try (MqttSink sink = new MqttSink()) {
+            sink.open(config, mock(SinkContext.class));
+
+            CountDownLatch ackLatch = new CountDownLatch(1);
+            AtomicBoolean failCalled = new AtomicBoolean(false);
+            sink.write(new TestRecord("before-restart".getBytes(StandardCharsets.UTF_8), ackLatch, failCalled));
+            assertTrue(ackLatch.await(10, TimeUnit.SECONDS), "publish was not acked before restart");
+            assertFalse(failCalled.get(), "record.fail() should not be called on successful publish");
+
+            DockerClientFactory.instance().client()
+                    .restartContainerCmd(mqttContainer.getContainerId())
+                    .withTimeout(5)
+                    .exec();
+
+            BlockingQueue<String> receivedPayloads = new LinkedBlockingQueue<>();
+            Mqtt5AsyncClient subscriber = connectSubscriberWhenReady("mqtt-sink-e2e-reconnect-subscriber");
+            try {
+                subscribe(subscriber, RECONNECT_TEST_TOPIC, receivedPayloads);
+                publishUntilReceived(sink, receivedPayloads, "after-restart");
+            } finally {
+                disconnectQuietly(subscriber);
+            }
+        }
+    }
+
+    // A docker-level restart bypasses the container's wait strategy, so the broker may not
+    // accept connections right away.
+    private Mqtt5AsyncClient connectSubscriberWhenReady(String clientId) throws Exception {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
+        Exception lastFailure = null;
+        while (System.nanoTime() < deadline) {
+            try {
+                return connectSubscriber(clientId);
+            } catch (Exception e) {
+                lastFailure = e;
+                TimeUnit.MILLISECONDS.sleep(500);
+            }
+        }
+        throw new AssertionError("Broker did not accept connections after restart", lastFailure);
+    }
+
+    // Waiting for the ack is not enough after a connection loss: the record may be dropped
+    // with fail() while the client is still reconnecting.
+    private void publishUntilReceived(MqttSink sink, BlockingQueue<String> receivedPayloads,
+                                      String payload) throws Exception {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(60);
+        while (System.nanoTime() < deadline) {
+            CountDownLatch ackLatch = new CountDownLatch(1);
+            sink.write(new TestRecord(payload.getBytes(StandardCharsets.UTF_8), ackLatch, new AtomicBoolean(false)));
+            if (ackLatch.await(1, TimeUnit.SECONDS)
+                    && payload.equals(receivedPayloads.poll(10, TimeUnit.SECONDS))) {
+                return;
+            }
+        }
+        fail("Timed out waiting for payload '" + payload + "' to be delivered");
+    }
+
     private Mqtt5AsyncClient connectSubscriber(String clientId) throws Exception {
         Mqtt5AsyncClient subscriber = MqttClient.builder()
                 .useMqttVersion5()
@@ -166,6 +244,14 @@ public class MqttSinkIntegrationTest {
                         new String(publish.getPayloadAsBytes(), StandardCharsets.UTF_8)))
                 .send()
                 .get(10, TimeUnit.SECONDS);
+    }
+
+    private static int findFreePort() {
+        try (ServerSocket socket = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
+            return socket.getLocalPort();
+        } catch (IOException e) {
+            throw new UncheckedIOException("Failed to probe a free host port for the MQTT broker", e);
+        }
     }
 
     private Map<String, Object> baseSinkConfig(String topic) {

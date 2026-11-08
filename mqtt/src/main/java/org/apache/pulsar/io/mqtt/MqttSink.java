@@ -20,6 +20,8 @@ package org.apache.pulsar.io.mqtt;
 
 import com.hivemq.client.mqtt.MqttClient;
 import com.hivemq.client.mqtt.datatypes.MqttQos;
+import com.hivemq.client.mqtt.lifecycle.MqttClientDisconnectedContext;
+import com.hivemq.client.mqtt.lifecycle.MqttDisconnectSource;
 import com.hivemq.client.mqtt.mqtt5.Mqtt5AsyncClient;
 import com.hivemq.client.mqtt.mqtt5.Mqtt5ClientBuilder;
 import java.nio.charset.StandardCharsets;
@@ -63,6 +65,8 @@ public class MqttSink implements Sink<byte[]> {
         if (mqttSinkConfig.isSslEnabled()) {
             builder = builder.sslWithDefaultConfig();
         }
+        builder = builder.automaticReconnectWithDefaultConfig();
+        builder = builder.addDisconnectedListener(this::logDisconnected);
 
         mqttClient = buildClient(builder);
         if (StringUtils.isNotBlank(mqttSinkConfig.getUsername())) {
@@ -90,6 +94,16 @@ public class MqttSink implements Sink<byte[]> {
 
     Mqtt5AsyncClient buildClient(Mqtt5ClientBuilder builder) {
         return builder.buildAsync();
+    }
+
+    private void logDisconnected(MqttClientDisconnectedContext context) {
+        if (context.getSource() == MqttDisconnectSource.USER) {
+            log.info("MQTT connection to {}:{} closed.",
+                    mqttSinkConfig.getServerHost(), mqttSinkConfig.getServerPort());
+        } else {
+            log.warn("MQTT connection to {}:{} lost, reconnecting automatically.",
+                    mqttSinkConfig.getServerHost(), mqttSinkConfig.getServerPort(), context.getCause());
+        }
     }
 
     @Override
