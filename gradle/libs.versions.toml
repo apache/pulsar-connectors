@@ -520,7 +520,6 @@ json-smart = "net.minidev:json-smart:2.5.2"
 json-flattener = "com.github.wnameless.json:json-flattener:0.16.4"
 flatbuffers-java = "com.google.flatbuffers:flatbuffers-java:1.9.0"
 jfairy = "io.codearte.jfairy:jfairy:0.5.9"
-embedded-redis = "com.github.kstyrc:embedded-redis:0.6"
 # Auth
 athenz-zts-java-client = { module = "com.yahoo.athenz:athenz-zts-java-client", version.ref = "athenz" }
 athenz-cert-refresher = { module = "com.yahoo.athenz:athenz-cert-refresher", version.ref = "athenz" }
