@@ -26,12 +26,14 @@ import java.io.Serializable;
 import java.util.Map;
 import lombok.Data;
 import lombok.experimental.Accessors;
+import lombok.extern.slf4j.Slf4j;
 import org.apache.pulsar.io.common.IOConfigUtils;
 import org.apache.pulsar.io.core.SinkContext;
 import org.apache.pulsar.io.core.annotations.FieldDoc;
 
 @Data
 @Accessors(chain = true)
+@Slf4j
 public class JdbcSinkConfig implements Serializable {
 
     private static final long serialVersionUID = 1L;
@@ -140,7 +142,8 @@ public class JdbcSinkConfig implements Serializable {
                     + "record only if the sink fails or is closed, or the instance is stopped. If the database "
                     + "hangs without failing the connection, writes block until it responds, so configure "
                     + "socket or query timeouts in jdbcUrl (e.g. socketTimeout for PostgreSQL or MariaDB). "
-                    + "When both are positive, maxQueueSize must be greater than or equal to batchSize. "
+                    + "When both are positive and maxQueueSize is smaller than batchSize, batchSize is used "
+                    + "as the queue size, so that a full batch fits in the queue. "
                     + "A value of 0 auto-sizes to batchSize * 10. "
                     + "A value of -1 (default) disables the limit (unbounded, legacy behavior)."
     )
@@ -175,10 +178,12 @@ public class JdbcSinkConfig implements Serializable {
             throw new IllegalArgumentException("maxQueueSize must be -1 (unbounded), 0 (auto-size), "
                     + "or a positive value.");
         }
+        // A queue smaller than a batch fills up before the batch is complete, so batchSize would
+        // never trigger a flush
         if (maxQueueSize > 0 && batchSize > 0 && maxQueueSize < batchSize) {
-            throw new IllegalArgumentException("maxQueueSize (" + maxQueueSize + ") must be greater than or "
-                    + "equal to batchSize (" + batchSize + "), otherwise the queue fills up before a batch is "
-                    + "complete and batchSize never triggers a flush.");
+            log.warn("maxQueueSize ({}) is smaller than batchSize ({}); using batchSize as the queue size",
+                    maxQueueSize, batchSize);
+            maxQueueSize = batchSize;
         }
     }
 

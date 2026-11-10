@@ -402,10 +402,15 @@ public class SqliteJdbcSinkQueueTest {
         }
     }
 
-    @Test(expectedExceptions = IllegalArgumentException.class,
-          expectedExceptionsMessageRegExp = ".*maxQueueSize.*batchSize.*")
-    public void testMaxQueueSizeSmallerThanBatchSizeRejected() throws Exception {
+    /**
+     * Test that a maxQueueSize smaller than batchSize is raised to batchSize, so that a full batch
+     * fits in the queue and triggers a flush.
+     */
+    @Test
+    public void testMaxQueueSizeSmallerThanBatchSizeUsesBatchSize() throws Exception {
         openSink(createConfig(200, 199), null);
+        Assert.assertEquals(sink.jdbcSinkConfig.getMaxQueueSize(), 200);
+        Assert.assertEquals(((LinkedBlockingDeque<?>) queue()).remainingCapacity(), 200);
     }
 
     /**
