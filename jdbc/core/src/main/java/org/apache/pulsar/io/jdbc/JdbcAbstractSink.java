@@ -81,6 +81,9 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
     private static final long QUEUE_OFFER_INTERVAL_SECONDS = 1;
     // Minimum interval between warnings while writes are blocked on a full queue
     private static final long QUEUE_FULL_WARN_INTERVAL_SECONDS = 60;
+    // Minimum time close() waits for an in-flight flush before interrupting it. close() waits
+    // at least twice timeoutMs.
+    private static final long MIN_CLOSE_FLUSH_WAIT_MS = 5000;
 
     protected JdbcUtils.TableDefinition tableDefinition;
 
@@ -188,60 +191,84 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
     @Override
     public void close() throws Exception {
         state.set(State.CLOSED);
-        // Fail any records still in the queue. incomingList is null if open() did not get far
-        // enough to create it. Records are polled one at a time rather than drained into a list
-        // so that a large (or unbounded) queue is not copied during shutdown.
-        // Record.fail() may throw (the Pulsar source's fail function always throws under
-        // EFFECTIVELY_ONCE). Keep draining and finish the cleanup below; log once at the end.
-        if (incomingList != null) {
-            Record<T> remaining;
-            int failErrors = 0;
-            RuntimeException firstFailError = null;
-            while ((remaining = incomingList.poll()) != null) {
-                try {
-                    remaining.fail();
-                } catch (RuntimeException e) {
-                    if (firstFailError == null) {
-                        firstFailError = e;
-                    }
-                    failErrors++;
-                }
-            }
-            if (firstFailError != null) {
-                log.warn("Record.fail() threw for {} queued record(s) while closing the sink",
-                        failErrors, firstFailError);
-            }
-        }
         if (scheduledFlushTask != null) {
             scheduledFlushTask.cancel(false);
             scheduledFlushTask = null;
         }
-        if (flushExecutor != null) {
-            int timeoutMs = jdbcSinkConfig.getTimeoutMs() * 2;
-            flushExecutor.shutdown();
-            flushExecutor.awaitTermination(timeoutMs, TimeUnit.MILLISECONDS);
-            flushExecutor = null;
-        }
-        if (insertStatement != null) {
-            insertStatement.close();
-        }
-        if (updateStatement != null) {
-            updateStatement.close();
-        }
-        if (upsertStatement != null) {
-            upsertStatement.close();
-        }
-        if (deleteStatement != null) {
-            deleteStatement.close();
-        }
-        if (connection != null && jdbcSinkConfig.isUseTransactions()) {
-            connection.commit();
-        }
-        if (connection != null) {
-            connection.close();
-            connection = null;
+        try {
+            // Let an in-flight flush finish its current round (flush() does not start another one
+            // once the sink is CLOSED) before the queued records are failed and the connection is
+            // closed under it. A flush that does not finish in time is interrupted.
+            // flushExecutor is null if open() did not get far enough to create it.
+            if (flushExecutor != null) {
+                long awaitMs = Math.max(2L * jdbcSinkConfig.getTimeoutMs(), MIN_CLOSE_FLUSH_WAIT_MS);
+                flushExecutor.shutdown();
+                try {
+                    if (!flushExecutor.awaitTermination(awaitMs, TimeUnit.MILLISECONDS)) {
+                        log.warn("In-flight flush did not finish within {} ms of closing the sink, "
+                                + "interrupting it", awaitMs);
+                        flushExecutor.shutdownNow();
+                    }
+                } catch (InterruptedException e) {
+                    log.warn("Interrupted while waiting for the in-flight flush to finish, interrupting it");
+                    Thread.currentThread().interrupt();
+                    flushExecutor.shutdownNow();
+                }
+                flushExecutor = null;
+            }
+        } finally {
+            failQueuedRecords();
+            if (insertStatement != null) {
+                insertStatement.close();
+            }
+            if (updateStatement != null) {
+                updateStatement.close();
+            }
+            if (upsertStatement != null) {
+                upsertStatement.close();
+            }
+            if (deleteStatement != null) {
+                deleteStatement.close();
+            }
+            if (connection != null && jdbcSinkConfig.isUseTransactions()) {
+                connection.commit();
+            }
+            if (connection != null) {
+                connection.close();
+                connection = null;
+            }
         }
         log.info("Closed jdbc connection: {}", jdbcUrl);
+    }
+
+    /**
+     * Fail the records still in the queue. incomingList is null if open() did not get far enough
+     * to create it. Records are polled one at a time rather than drained into a list so that a
+     * large (or unbounded) queue is not copied during shutdown.
+     * Record.fail() may throw (the Pulsar source's fail function always throws under
+     * EFFECTIVELY_ONCE). Keep draining so that close() can finish the cleanup; log once at the end.
+     */
+    private void failQueuedRecords() {
+        if (incomingList == null) {
+            return;
+        }
+        Record<T> remaining;
+        int failErrors = 0;
+        RuntimeException firstFailError = null;
+        while ((remaining = incomingList.poll()) != null) {
+            try {
+                remaining.fail();
+            } catch (RuntimeException e) {
+                if (firstFailError == null) {
+                    firstFailError = e;
+                }
+                failErrors++;
+            }
+        }
+        if (firstFailError != null) {
+            log.warn("Record.fail() threw for {} queued record(s) while closing the sink",
+                    failErrors, firstFailError);
+        }
     }
 
     @Override

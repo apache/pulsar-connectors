@@ -32,6 +32,7 @@ import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.List;
@@ -274,6 +275,58 @@ public class SqliteJdbcSinkQueueTest {
             verify(records.get(i)).fail();
             verify(records.get(i), never()).ack();
         }
+    }
+
+    /**
+     * Test that close() waits for an in-flight flush before failing the queued records and closing
+     * the connection: the batch being written is committed and acked, and the queued records are
+     * failed only after that.
+     */
+    @Test
+    public void testCloseWaitsForInFlightFlush() throws Exception {
+        openSink(createConfig(2, -1), null);
+        blockFlushes(0);
+        List<CompletableFuture<Boolean>> results = new ArrayList<>();
+        List<Record<GenericObject>> records = createRecords(4, results);
+        List<Integer> completionOrder = Collections.synchronizedList(new ArrayList<>());
+        for (int i = 0; i < results.size(); i++) {
+            int index = i;
+            results.get(i).thenRun(() -> completionOrder.add(index));
+        }
+        Connection connection = sink.getConnection();
+
+        // A full batch starts a flush that gets stuck. Queue another batch directly, so that no
+        // other flush is scheduled.
+        sink.write(records.get(0));
+        sink.write(records.get(1));
+        Assert.assertTrue(flushBlocked.await(10, TimeUnit.SECONDS));
+        queue().addAll(records.subList(2, 4));
+        CompletableFuture<Void> closeDone = new CompletableFuture<>();
+        Thread closer = new Thread(() -> {
+            try {
+                sink.close();
+                closeDone.complete(null);
+            } catch (Throwable t) {
+                closeDone.completeExceptionally(t);
+            }
+        }, "closer");
+        closer.setDaemon(true);
+        closer.start();
+        awaitTimedWaiting(closer);
+
+        Assert.assertFalse(closeDone.isDone(), "close() should wait for the flush");
+        Assert.assertTrue(results.stream().noneMatch(CompletableFuture::isDone));
+        Assert.assertFalse(connection.isClosed());
+        releaseFlush.countDown();
+        closeDone.get(10, TimeUnit.SECONDS);
+
+        Assert.assertTrue(results.get(0).get(1, TimeUnit.SECONDS));
+        Assert.assertTrue(results.get(1).get(1, TimeUnit.SECONDS));
+        Assert.assertFalse(results.get(2).get(1, TimeUnit.SECONDS));
+        Assert.assertFalse(results.get(3).get(1, TimeUnit.SECONDS));
+        Assert.assertEquals(completionOrder, List.of(0, 1, 2, 3));
+        Assert.assertTrue(queue().isEmpty());
+        Assert.assertTrue(connection.isClosed());
     }
 
     /**
@@ -596,10 +649,17 @@ public class SqliteJdbcSinkQueueTest {
      * every millisecond so that the wait is noticed long before the offer interval ends.
      */
     private static void awaitBlockedInWrite(Thread writer) throws Exception {
+        awaitTimedWaiting(writer);
+    }
+
+    /**
+     * Wait until {@code thread} is in a timed wait, polling every millisecond.
+     */
+    private static void awaitTimedWaiting(Thread thread) throws Exception {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
-        while (writer.getState() != Thread.State.TIMED_WAITING) {
+        while (thread.getState() != Thread.State.TIMED_WAITING) {
             if (System.nanoTime() > deadline) {
-                throw new TimeoutException("write() did not block, writer state: " + writer.getState());
+                throw new TimeoutException(thread.getName() + " did not block, state: " + thread.getState());
             }
             Thread.sleep(1);
         }
