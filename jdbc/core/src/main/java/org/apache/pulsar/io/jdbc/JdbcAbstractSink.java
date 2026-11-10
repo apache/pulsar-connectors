@@ -27,6 +27,7 @@ import java.sql.Statement;
 import java.util.Arrays;
 import java.util.Deque;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
@@ -305,12 +306,12 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
         }
 
         // close() or fatal() may have run while this thread was waiting in offer(). If so, the
-        // queue may never be flushed again, so take the record back and fail it. The record was
+        // queue may never be flushed again, so take this record instance back and fail it. It was
         // just added at the tail, so search from there. If it is not found, flush() or close()
         // has already drained the record and owns its ack/fail.
         current = state.get();
         if (current != State.OPEN) {
-            if (incomingList.removeLastOccurrence(record)) {
+            if (removeQueuedRecord(record)) {
                 log.warn("Sink became {} after record was queued, failing record", current);
                 record.fail();
             }
@@ -324,6 +325,22 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
             }
             scheduleFlush();
         }
+    }
+
+    /**
+     * Remove {@code record} itself from the queue, searching from the tail. Unlike
+     * removeLastOccurrence(), this compares identity rather than equals(): a Record implementation
+     * may consider different records equal, and removing another queued record would lose it while
+     * {@code record} stays queued and is failed twice.
+     */
+    private boolean removeQueuedRecord(Record<T> record) {
+        for (Iterator<Record<T>> it = incomingList.descendingIterator(); it.hasNext(); ) {
+            if (it.next() == record) {
+                it.remove();
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

@@ -544,6 +544,66 @@ public class SqliteJdbcSinkQueueTest {
     }
 
     /**
+     * Test that write() takes back the record it queued, and not another queued record that is
+     * equal to it, when the sink is no longer OPEN after offer() accepted the record.
+     */
+    @Test
+    public void testWriteTakesBackItsOwnRecordAfterOffer() throws Exception {
+        openSink(createConfig(10, -1), null);
+        EqualRecord record = new EqualRecord();
+        EqualRecord equalRecord = new EqualRecord();
+        // After offer(), an equal record is queued behind the record, and the sink fails
+        FieldUtils.writeField(sink, "incomingList", new LinkedBlockingDeque<Record<GenericObject>>() {
+            @Override
+            public boolean offer(Record<GenericObject> e, long timeout, TimeUnit unit)
+                    throws InterruptedException {
+                boolean accepted = super.offer(e, timeout, unit);
+                add(equalRecord);
+                try {
+                    setState("FAILED");
+                } catch (IllegalAccessException ex) {
+                    throw new IllegalStateException(ex);
+                }
+                return accepted;
+            }
+        }, true);
+
+        sink.write(record);
+
+        Assert.assertEquals(record.failCount, 1);
+        Assert.assertEquals(equalRecord.failCount, 0);
+        Assert.assertEquals(queue().size(), 1);
+        Assert.assertSame(queue().peek(), equalRecord);
+    }
+
+    /**
+     * A record that is equal to every other EqualRecord, and counts its fail() calls.
+     */
+    private static class EqualRecord implements Record<GenericObject> {
+        private int failCount;
+
+        @Override
+        public GenericObject getValue() {
+            return null;
+        }
+
+        @Override
+        public void fail() {
+            failCount++;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            return o instanceof EqualRecord;
+        }
+
+        @Override
+        public int hashCode() {
+            return 0;
+        }
+    }
+
+    /**
      * Sink config without a time-based flush.
      */
     private Map<String, Object> createConfig(int batchSize, int maxQueueSize) {
