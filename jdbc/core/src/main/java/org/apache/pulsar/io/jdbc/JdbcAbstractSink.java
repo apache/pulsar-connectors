@@ -27,15 +27,19 @@ import java.sql.Statement;
 import java.util.Arrays;
 import java.util.Deque;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingDeque;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -73,19 +77,34 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
 
     protected static final String ACTION_PROPERTY = "ACTION";
 
+    // How long a write() blocked on a full queue waits at a time before re-checking that the sink
+    // is still OPEN. It does not limit how long write() blocks in total.
+    private static final long QUEUE_OFFER_INTERVAL_SECONDS = 1;
+    // Minimum interval between warnings while writes are blocked on a full queue
+    private static final long QUEUE_FULL_WARN_INTERVAL_SECONDS = 60;
+    // Minimum time close() waits for an in-flight flush before interrupting it. close() waits
+    // at least twice timeoutMs.
+    private static final long MIN_CLOSE_FLUSH_WAIT_MS = 5000;
+
     protected JdbcUtils.TableDefinition tableDefinition;
 
     // for flush
-    private Deque<Record<T>> incomingList;
+    private LinkedBlockingDeque<Record<T>> incomingList;
     private AtomicBoolean isFlushing;
     private int batchSize;
     private int maxQueueSize;
-    private ScheduledExecutorService flushExecutor;
+    private volatile ScheduledExecutorService flushExecutor;
     private ScheduledFuture<?> scheduledFlushTask;
     private SinkContext sinkContext;
     private Properties connectionProperties;
-    private volatile boolean queueFullLogged = false;
     private final AtomicReference<State> state = new AtomicReference<>(State.OPEN);
+    // Timed-out queue waits since the last "queue is full" warning (reset once a blocked write()
+    // gets queue space), and when (System.nanoTime()) that warning was logged. The latter starts
+    // one warn interval in the past so that the first warning is logged at once: nanoTime() has
+    // no value that could mean "never".
+    private final AtomicLong queueFullTimeouts = new AtomicLong();
+    private final AtomicLong queueFullLastWarnNanos =
+            new AtomicLong(System.nanoTime() - TimeUnit.SECONDS.toNanos(QUEUE_FULL_WARN_INTERVAL_SECONDS));
 
     @Override
     public void open(Map<String, Object> config, SinkContext sinkContext) throws Exception {
@@ -127,7 +146,11 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
         }
         // maxQueueSize < 0 (i.e. -1) means unbounded (legacy behavior)
         log.info("JDBC sink queue capacity: {}", maxQueueSize > 0 ? maxQueueSize : "unbounded");
-        incomingList = new LinkedList<>();
+        if (maxQueueSize > 0) {
+            incomingList = new LinkedBlockingDeque<>(maxQueueSize);
+        } else {
+            incomingList = new LinkedBlockingDeque<>();
+        }
         isFlushing = new AtomicBoolean(false);
 
         flushExecutor = Executors.newScheduledThreadPool(1);
@@ -176,71 +199,193 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
             scheduledFlushTask.cancel(false);
             scheduledFlushTask = null;
         }
-        if (flushExecutor != null) {
-            int timeoutMs = jdbcSinkConfig.getTimeoutMs() * 2;
-            flushExecutor.shutdown();
-            flushExecutor.awaitTermination(timeoutMs, TimeUnit.MILLISECONDS);
-            flushExecutor = null;
-        }
-        if (insertStatement != null) {
-            insertStatement.close();
-        }
-        if (updateStatement != null) {
-            updateStatement.close();
-        }
-        if (upsertStatement != null) {
-            upsertStatement.close();
-        }
-        if (deleteStatement != null) {
-            deleteStatement.close();
-        }
-        if (connection != null && jdbcSinkConfig.isUseTransactions()) {
-            connection.commit();
-        }
-        if (connection != null) {
-            connection.close();
-            connection = null;
+        try {
+            // Let an in-flight flush finish its current round (flush() does not start another one
+            // once the sink is CLOSED) before the queued records are failed and the connection is
+            // closed under it. A flush that does not finish in time is interrupted.
+            // flushExecutor is null if open() did not get far enough to create it.
+            if (flushExecutor != null) {
+                long awaitMs = Math.max(2L * jdbcSinkConfig.getTimeoutMs(), MIN_CLOSE_FLUSH_WAIT_MS);
+                flushExecutor.shutdown();
+                try {
+                    if (!flushExecutor.awaitTermination(awaitMs, TimeUnit.MILLISECONDS)) {
+                        log.warn("In-flight flush did not finish within {} ms of closing the sink, "
+                                + "interrupting it", awaitMs);
+                        flushExecutor.shutdownNow();
+                    }
+                } catch (InterruptedException e) {
+                    log.warn("Interrupted while waiting for the in-flight flush to finish, interrupting it");
+                    Thread.currentThread().interrupt();
+                    flushExecutor.shutdownNow();
+                }
+                flushExecutor = null;
+            }
+        } finally {
+            failQueuedRecords();
+            if (insertStatement != null) {
+                insertStatement.close();
+            }
+            if (updateStatement != null) {
+                updateStatement.close();
+            }
+            if (upsertStatement != null) {
+                upsertStatement.close();
+            }
+            if (deleteStatement != null) {
+                deleteStatement.close();
+            }
+            if (connection != null && jdbcSinkConfig.isUseTransactions()) {
+                connection.commit();
+            }
+            if (connection != null) {
+                connection.close();
+                connection = null;
+            }
         }
         log.info("Closed jdbc connection: {}", jdbcUrl);
     }
 
+    /**
+     * Fail the records still in the queue. incomingList is null if open() did not get far enough
+     * to create it. Records are polled one at a time rather than drained into a list so that a
+     * large (or unbounded) queue is not copied during shutdown.
+     * Record.fail() may throw (the Pulsar source's fail function always throws under
+     * EFFECTIVELY_ONCE). Keep draining so that close() can finish the cleanup; log once at the end.
+     */
+    private void failQueuedRecords() {
+        if (incomingList == null) {
+            return;
+        }
+        Record<T> remaining;
+        int failErrors = 0;
+        RuntimeException firstFailError = null;
+        while ((remaining = incomingList.poll()) != null) {
+            try {
+                remaining.fail();
+            } catch (RuntimeException e) {
+                if (firstFailError == null) {
+                    firstFailError = e;
+                }
+                failErrors++;
+            }
+        }
+        if (firstFailError != null) {
+            log.warn("Record.fail() threw for {} queued record(s) while closing the sink",
+                    failErrors, firstFailError);
+        }
+    }
+
     @Override
     public void write(Record<T> record) throws Exception {
-        if (state.get() != State.OPEN) {
-            log.warn("Sink is not in OPEN state (current: {}), failing record", state.get());
+        State current = state.get();
+        if (current != State.OPEN) {
+            log.warn("Sink is not in OPEN state (current: {}), failing record", current);
             record.fail();
             return;
         }
-        int number = 0;
-        boolean shouldFail = false;
-        boolean shouldLogQueueFull = false;
-        int queueSizeSnapshot = 0;
-        synchronized (incomingList) {
-            if (maxQueueSize > 0 && incomingList.size() >= maxQueueSize) {
-                if (!queueFullLogged) {
-                    queueFullLogged = true;
-                    shouldLogQueueFull = true;
-                    queueSizeSnapshot = incomingList.size();
+
+        // Block until there is space in the queue. Blocking the Pulsar IO thread IS the
+        // back-pressure: it pauses message consumption for this sink. The record is not failed
+        // just because the queue stays full: a negative ack may redeliver it after newer messages
+        // with the same key (e.g. on a Key_Shared subscription), so an older record could
+        // overwrite a newer row. The offer is timed only so that a waiting write() notices when
+        // the sink is closed or fails.
+        try {
+            boolean timedOut = false;
+            while (!incomingList.offer(record, QUEUE_OFFER_INTERVAL_SECONDS, TimeUnit.SECONDS)) {
+                current = state.get();
+                if (current != State.OPEN) {
+                    log.warn("Sink became {} while waiting for queue space, failing record", current);
+                    record.fail();
+                    return;
                 }
-                shouldFail = true;
-            } else {
-                incomingList.add(record);
-                number = incomingList.size();
+                timedOut = true;
+                logQueueFullTimeout();
+                // Safety net: schedule a flush, so that a full queue drains even when none is due
+                scheduleFlush();
             }
-        }
-        if (shouldFail) {
-            if (shouldLogQueueFull) {
-                log.warn("Internal queue is full ({} >= {}), failing records to apply back-pressure",
-                        queueSizeSnapshot, maxQueueSize);
+            if (timedOut) {
+                // The queue had space again, so a later full-queue warning does not count the
+                // timeouts of this wait
+                queueFullTimeouts.set(0);
             }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
             record.fail();
             return;
         }
+
+        // close() or fatal() may have run while this thread was waiting in offer(). If so, the
+        // queue may never be flushed again, so take this record instance back and fail it. It was
+        // just added at the tail, so search from there. If it is not found, flush() or close()
+        // has already drained the record and owns its ack/fail.
+        current = state.get();
+        if (current != State.OPEN) {
+            if (removeQueuedRecord(record)) {
+                log.warn("Sink became {} after record was queued, failing record", current);
+                record.fail();
+            }
+            return;
+        }
+
+        int number = incomingList.size();
         if (batchSize > 0 && number >= batchSize) {
             if (log.isDebugEnabled()) {
                 log.debug("flushing by batches, hit batch size {}", batchSize);
             }
-            flushExecutor.schedule(this::flush, 0, TimeUnit.MILLISECONDS);
+            scheduleFlush();
+        }
+    }
+
+    /**
+     * Remove {@code record} itself from the queue, searching from the tail. Unlike
+     * removeLastOccurrence(), this compares identity rather than equals(): a Record implementation
+     * may consider different records equal, and removing another queued record would lose it while
+     * {@code record} stays queued and is failed twice.
+     */
+    private boolean removeQueuedRecord(Record<T> record) {
+        for (Iterator<Record<T>> it = incomingList.descendingIterator(); it.hasNext(); ) {
+            if (it.next() == record) {
+                it.remove();
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Called each time a write() blocked on a full queue has waited one offer interval. Logs every
+     * timeout at DEBUG, and a WARN with the number of timeouts at most once per
+     * {@link #QUEUE_FULL_WARN_INTERVAL_SECONDS}.
+     */
+    private void logQueueFullTimeout() {
+        queueFullTimeouts.incrementAndGet();
+        if (log.isDebugEnabled()) {
+            log.debug("Internal queue is still full (capacity {}) after waiting {} s, write() keeps waiting",
+                    maxQueueSize, QUEUE_OFFER_INTERVAL_SECONDS);
+        }
+        long now = System.nanoTime();
+        long lastWarn = queueFullLastWarnNanos.get();
+        if (now - lastWarn >= TimeUnit.SECONDS.toNanos(QUEUE_FULL_WARN_INTERVAL_SECONDS)
+                && queueFullLastWarnNanos.compareAndSet(lastWarn, now)) {
+            log.warn("Internal queue is full (capacity {}), blocking writes until space frees up; "
+                    + "{} wait(s) of {} s timed out since the last warning",
+                    maxQueueSize, queueFullTimeouts.getAndSet(0), QUEUE_OFFER_INTERVAL_SECONDS);
+        }
+    }
+
+    private void scheduleFlush() {
+        // close() may have shut the executor down, or cleared the field, since write() checked the
+        // state. close() fails the queued records, so there is nothing left to flush then.
+        ScheduledExecutorService executor = flushExecutor;
+        if (executor == null) {
+            return;
+        }
+        try {
+            executor.schedule(this::flush, 0, TimeUnit.MILLISECONDS);
+        } catch (RejectedExecutionException e) {
+            // A no-op after close(), since fatal() only acts on an OPEN sink
+            fatal(e);
         }
     }
 
@@ -282,14 +427,15 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
 
 
     private void flush() {
-        if (state.get() == State.CLOSED) {
+        // Do not flush once the sink has failed, e.g. a flush queued before an earlier one failed:
+        // it would ack records newer than the failed batch, which is redelivered and could then
+        // overwrite them. The records stay queued and close() fails them.
+        if (state.get() != State.OPEN) {
             return;
         }
         if (!isFlushing.compareAndSet(false, true)) {
             if (log.isDebugEnabled()) {
-                synchronized (incomingList) {
-                    log.debug("Already in flushing state, will not flush, queue size: {}", incomingList.size());
-                }
+                log.debug("Already in flushing state, will not flush, queue size: {}", incomingList.size());
             }
             return;
         }
@@ -301,22 +447,23 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
             do {
                 final Deque<Record<T>> swapList = new LinkedList<>();
 
-                synchronized (incomingList) {
-                    if (incomingList.isEmpty()) {
-                        return;
-                    }
-                    if (log.isDebugEnabled()) {
-                        log.debug("Starting flush, queue size: {}", incomingList.size());
-                    }
-                    final int actualBatchSize = batchSize > 0 ? Math.min(incomingList.size(), batchSize) :
-                            incomingList.size();
-
-                    for (int i = 0; i < actualBatchSize; i++) {
-                        swapList.add(incomingList.removeFirst());
-                    }
-                    needAnotherRound = batchSize > 0 && !incomingList.isEmpty()
-                            && incomingList.size() >= batchSize;
+                // Re-check before each round: the sink may have been closed, or have failed,
+                // while the previous round was running. The records stay queued and close()
+                // fails them.
+                if (state.get() != State.OPEN) {
+                    return;
                 }
+                int drainSize = batchSize > 0 ? batchSize : Integer.MAX_VALUE;
+                incomingList.drainTo(swapList, drainSize);
+                if (swapList.isEmpty()) {
+                    return;
+                }
+                if (log.isDebugEnabled()) {
+                    log.debug("Starting flush, drained {} records, queue remaining: {}",
+                            swapList.size(), incomingList.size());
+                }
+                needAnotherRound = batchSize > 0 && !incomingList.isEmpty()
+                        && incomingList.size() >= batchSize;
                 long start = System.nanoTime();
 
                 int count = 0;
@@ -373,7 +520,6 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
                     } else {
                         internalFlush(swapList);
                     }
-                    queueFullLogged = false;
                 } catch (Throwable e) {
                     // Catch Throwable (not just Exception) so an Error such as StackOverflowError
                     // is surfaced to the framework via fatal() and the instance is terminated and
@@ -387,7 +533,20 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
                             TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start),
                             swapList.size(),
                             e);
-                    swapList.forEach(Record::fail);
+                    // Record.fail() may throw (the Pulsar source's fail function always throws
+                    // under EFFECTIVELY_ONCE). Keep failing the other records and still roll back
+                    // and call fatal(). e may itself have been thrown by fail() in executeBatch(),
+                    // and a fail function may throw the same instance again, which
+                    // addSuppressed() rejects.
+                    for (Record<T> r : swapList) {
+                        try {
+                            r.fail();
+                        } catch (RuntimeException failEx) {
+                            if (failEx != e) {
+                                e.addSuppressed(failEx);
+                            }
+                        }
+                    }
                     try {
                         if (jdbcSinkConfig.isUseTransactions()) {
                             connection.rollback();
@@ -499,18 +658,24 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
     }
 
     /**
-     * Signal a fatal exception to the framework.
-     * This will cause the function instance to terminate properly.
+     * Move an OPEN sink to FAILED, stop the time-based flush and signal the fatal exception to the
+     * framework, which terminates the function instance properly. Without a SinkContext the sink
+     * still becomes FAILED, so that it stops flushing and write() fails records instead of
+     * blocking on a queue that is no longer flushed. Does nothing if the sink is not OPEN.
      *
      * @param e the fatal exception
      */
     private void fatal(Throwable e) {
-        if (sinkContext != null && state.compareAndSet(State.OPEN, State.FAILED)) {
+        if (state.compareAndSet(State.OPEN, State.FAILED)) {
             log.error("Fatal error in JDBC sink, signaling framework for shutdown", e);
-            if (scheduledFlushTask != null) {
-                scheduledFlushTask.cancel(false);
+            // close() may clear the field concurrently
+            ScheduledFuture<?> flushTask = scheduledFlushTask;
+            if (flushTask != null) {
+                flushTask.cancel(false);
             }
-            sinkContext.fatal(e);
+            if (sinkContext != null) {
+                sinkContext.fatal(e);
+            }
         }
     }
 

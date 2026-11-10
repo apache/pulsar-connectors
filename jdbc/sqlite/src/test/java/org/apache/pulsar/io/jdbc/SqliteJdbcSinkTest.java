@@ -533,10 +533,8 @@ public class SqliteJdbcSinkTest {
             @SuppressWarnings("unchecked")
             Deque<Record<GenericObject>> incomingList =
                     (Deque<Record<GenericObject>>) FieldUtils.readField(sink, "incomingList", true);
-            synchronized (incomingList) {
-                for (int i = 0; i < recordCount; i++) {
-                    incomingList.add(record);
-                }
+            for (int i = 0; i < recordCount; i++) {
+                incomingList.add(record);
             }
 
             // Nothing else can flush, so this single call must drain the entire backlog
@@ -1084,50 +1082,6 @@ public class SqliteJdbcSinkTest {
         }
     }
 
-    /**
-     * Test that the bounded queue applies back-pressure by failing records when full.
-     */
-    @Test
-    public void testBoundedQueueBackPressure() throws Exception {
-        jdbcSink.close();
-        jdbcSink = null;
-
-        String jdbcUrl = sqliteUtils.sqliteUri();
-        Map<String, Object> conf = Maps.newHashMap();
-        conf.put("jdbcUrl", jdbcUrl);
-        conf.put("tableName", tableName);
-        conf.put("key", "field3");
-        conf.put("nonKey", "field1,field2");
-        // Large batch size so flush is not triggered by writes
-        conf.put("batchSize", 1000);
-        // No time-based flush
-        conf.put("timeoutMs", 0);
-        // Small queue to test back-pressure
-        conf.put("maxQueueSize", 5);
-
-        SqliteJdbcAutoSchemaSink boundedSink = new SqliteJdbcAutoSchemaSink();
-        try {
-            boundedSink.open(conf, null);
-
-            // Fill the queue to capacity
-            List<CompletableFuture<Boolean>> futures = new java.util.ArrayList<>();
-            for (int i = 0; i < 5; i++) {
-                CompletableFuture<Boolean> f = new CompletableFuture<>();
-                futures.add(f);
-                boundedSink.write(createMockFooRecord(new Foo("f1", "f2", i + 100), Maps.newHashMap(), f));
-            }
-
-            // Next write should be rejected due to queue full
-            CompletableFuture<Boolean> overflowFuture = new CompletableFuture<>();
-            boundedSink.write(createMockFooRecord(new Foo("overflow", "val", 999), Maps.newHashMap(), overflowFuture));
-
-            // The overflow record should be failed immediately
-            Assert.assertFalse(overflowFuture.get(1, TimeUnit.SECONDS));
-        } finally {
-            boundedSink.close();
-        }
-    }
-
     @Test(expectedExceptions = IllegalArgumentException.class,
           expectedExceptionsMessageRegExp = ".*maxQueueSize.*")
     public void testInvalidMaxQueueSizeRejected() throws Exception {
@@ -1201,8 +1155,8 @@ public class SqliteJdbcSinkTest {
     }
 
     @SuppressWarnings("unchecked")
-    private Record<GenericObject> createMockFooRecord(Foo record, Map<String, String> actionProperties,
-                                                        CompletableFuture<Boolean> future) {
+    static Record<GenericObject> createMockFooRecord(Foo record, Map<String, String> actionProperties,
+                                                       CompletableFuture<Boolean> future) {
         Message<GenericRecord> insertMessage = mock(MessageImpl.class);
         GenericSchema<GenericRecord> genericAvroSchema;
         AvroSchema<Foo> schema = AvroSchema.of(SchemaDefinition.<Foo>builder()
