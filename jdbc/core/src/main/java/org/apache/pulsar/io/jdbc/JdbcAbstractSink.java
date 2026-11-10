@@ -684,11 +684,30 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
     private void internalFlush(Deque<Record<T>> swapList) throws SQLException {
         if (jdbcSinkConfig.isUseTransactions()) {
             connection.commit();
-            // Remove each record before acking it, so that if ack() throws, flush() fails only the
-            // records that were not acked yet
-            Record<T> record;
-            while ((record = swapList.pollFirst()) != null) {
-                record.ack();
+            ackCommitted(swapList, swapList.size());
+        }
+    }
+
+    /**
+     * Remove the first {@code count} records, which are committed, from {@code swapList} and ack
+     * each of them. If ack() throws, the remaining committed records are removed without being
+     * acked or failed, and the exception is rethrown: flush() then fails only the records that are
+     * not written yet and calls fatal(). The unacked records are redelivered after the instance
+     * restarts. Failing them could redeliver them after newer messages with the same key, which
+     * would then be overwritten by the older records.
+     */
+    private void ackCommitted(Deque<Record<T>> swapList, int count) {
+        for (int acked = 0; acked < count; acked++) {
+            try {
+                swapList.removeFirst().ack();
+            } catch (Throwable e) {
+                int unacked = count - acked - 1;
+                for (int i = 0; i < unacked; i++) {
+                    swapList.removeFirst();
+                }
+                log.warn("Record.ack() threw after the records were committed, leaving the {} committed "
+                        + "record(s) after it unacked", unacked);
+                throw e;
             }
         }
     }
@@ -723,9 +742,8 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
             if (useTransactions) {
                 connection.commit();
             }
-            for (int r: results) {
-                swapList.removeFirst().ack();
-            }
+            // Committed either way, with auto-commit by executeBatch()
+            ackCommitted(swapList, results.length);
         } else {
             if (useTransactions) {
                 connection.rollback();

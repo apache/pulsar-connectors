@@ -420,17 +420,34 @@ public class SqliteJdbcSinkQueueTest {
         Assert.assertTrue(periodicFlush.isCancelled());
     }
 
+    @DataProvider(name = "committingFlushes")
+    public Object[][] committingFlushes() {
+        // useJdbcBatch, useTransactions. Without the JDBC batch API and transactions, each record
+        // is acked right after its statement, before the next one is written.
+        return new Object[][] {{false, true}, {true, true}, {true, false}};
+    }
+
     /**
-     * Test that a record whose ack() throws after the transaction is committed is not failed as
-     * well. The other records of the batch are failed once, and fatal() reports the ack() error.
+     * Test that when ack() throws for a record after the batch is committed, neither that record
+     * nor the committed records after it are failed, not even by close(): failing them could
+     * redeliver them after newer messages with the same key. They are left unacked, to be
+     * redelivered after the instance restarts, and fatal() reports the ack() error.
      */
-    @Test
-    public void testFailedAckAfterCommitDoesNotFailAckedRecord() throws Exception {
+    @Test(dataProvider = "committingFlushes")
+    public void testFailedAckAfterCommitLeavesCommittedRecordsUnacked(boolean useJdbcBatch, boolean useTransactions)
+            throws Exception {
         SinkContext sinkContext = mock(SinkContext.class);
         Map<String, Object> conf = createConfig(4, -1);
-        conf.put("useTransactions", true);
+        conf.put("useJdbcBatch", useJdbcBatch);
+        conf.put("useTransactions", useTransactions);
         openSink(conf, sinkContext);
-        mockInsertStatement(() -> { });
+        if (useJdbcBatch) {
+            PreparedStatement statement = mock(PreparedStatement.class);
+            when(statement.executeBatch()).thenReturn(new int[] {1, 1, 1, 1});
+            FieldUtils.writeField(sink, "insertStatement", statement, true);
+        } else {
+            mockInsertStatement(() -> { });
+        }
         AtomicLong acked = new AtomicLong();
         AtomicLong failed = new AtomicLong();
         AtomicLong throwingAcks = new AtomicLong();
@@ -451,13 +468,63 @@ public class SqliteJdbcSinkQueueTest {
         Assert.assertEquals(throwingAcks.get(), 1L);
         Assert.assertEquals(throwingFails.get(), 0L);
         Assert.assertEquals(acked.get(), 0L);
-        Assert.assertEquals(failed.get(), 3L);
+        Assert.assertEquals(failed.get(), 0L);
+        Assert.assertTrue(queue().isEmpty());
+        Assert.assertEquals(FieldUtils.readField(sink, "state", true).toString(), "FAILED");
+
+        sink.close();
+        sink = null;
+        Assert.assertEquals(throwingAcks.get(), 1L);
+        Assert.assertEquals(throwingFails.get(), 0L);
+        Assert.assertEquals(acked.get(), 0L);
+        Assert.assertEquals(failed.get(), 0L);
+    }
+
+    /**
+     * Test that when ack() throws after a JDBC batch is committed, the records of the round that
+     * are not written yet (here a following batch of deletes) are failed, while the committed
+     * records are left unacked.
+     */
+    @Test(dataProvider = "useTransactions")
+    public void testFailedAckAfterJdbcBatchFailsOnlyUnwrittenRecords(boolean useTransactions) throws Exception {
+        SinkContext sinkContext = mock(SinkContext.class);
+        Map<String, Object> conf = createConfig(4, -1);
+        conf.put("useJdbcBatch", true);
+        conf.put("useTransactions", useTransactions);
+        openSink(conf, sinkContext);
+        PreparedStatement insertStatement = mock(PreparedStatement.class);
+        when(insertStatement.executeBatch()).thenReturn(new int[] {1, 1});
+        FieldUtils.writeField(sink, "insertStatement", insertStatement, true);
+        PreparedStatement deleteStatement = mock(PreparedStatement.class);
+        FieldUtils.writeField(sink, "deleteStatement", deleteStatement, true);
+        AtomicLong acked = new AtomicLong();
+        AtomicLong insertsFailed = new AtomicLong();
+        AtomicLong deletesFailed = new AtomicLong();
+        RuntimeException ackError = new RuntimeException("Simulated ack() failure");
+        Record<GenericObject> throwingInsert = createRecord(() -> {
+            throw ackError;
+        }, insertsFailed::incrementAndGet);
+        Record<GenericObject> insert = createRecord(acked::incrementAndGet, insertsFailed::incrementAndGet);
+        Record<GenericObject> delete = createRecord("DELETE", acked::incrementAndGet, deletesFailed::incrementAndGet);
+
+        // The write() that completes the batch schedules the flush. The inserts are written as one
+        // JDBC batch when the first delete is reached.
+        queue().addAll(List.of(throwingInsert, insert, delete));
+        sink.write(delete);
+        awaitScheduledFlushes();
+
+        verify(sinkContext).fatal(ackError);
+        verify(deleteStatement, never()).executeBatch();
+        Assert.assertEquals(acked.get(), 0L);
+        Assert.assertEquals(insertsFailed.get(), 0L);
+        Assert.assertEquals(deletesFailed.get(), 2L);
         Assert.assertTrue(queue().isEmpty());
 
         sink.close();
         sink = null;
-        Assert.assertEquals(throwingFails.get(), 0L);
-        Assert.assertEquals(failed.get(), 3L);
+        Assert.assertEquals(acked.get(), 0L);
+        Assert.assertEquals(insertsFailed.get(), 0L);
+        Assert.assertEquals(deletesFailed.get(), 2L);
     }
 
     /**
@@ -1199,10 +1266,17 @@ public class SqliteJdbcSinkQueueTest {
     }
 
     /**
-     * A record whose ack() and fail() run the given functions.
+     * An INSERT record whose ack() and fail() run the given functions.
+     */
+    private static Record<GenericObject> createRecord(Runnable ackFunction, Runnable failFunction) {
+        return createRecord("INSERT", ackFunction, failFunction);
+    }
+
+    /**
+     * A record with the given ACTION whose ack() and fail() run the given functions.
      */
     @SuppressWarnings("unchecked")
-    private static Record<GenericObject> createRecord(Runnable ackFunction, Runnable failFunction) {
+    private static Record<GenericObject> createRecord(String action, Runnable ackFunction, Runnable failFunction) {
         AvroSchema<Foo> schema = AvroSchema.of(SchemaDefinition.<Foo>builder()
                 .withPojo(Foo.class).withAlwaysAllowNull(true).build());
         AutoConsumeSchema autoConsumeSchema = new AutoConsumeSchema();
@@ -1210,7 +1284,7 @@ public class SqliteJdbcSinkQueueTest {
         GenericAvroSchema genericAvroSchema = new GenericAvroSchema(schema.getSchemaInfo());
         Message<GenericRecord> message = mock(MessageImpl.class, withSettings().stubOnly());
         when(message.getValue()).thenReturn(genericAvroSchema.decode(schema.encode(new Foo("f1", "f2", 1))));
-        when(message.getProperties()).thenReturn(ImmutableMap.of("ACTION", "INSERT"));
+        when(message.getProperties()).thenReturn(ImmutableMap.of("ACTION", action));
         Record<? extends GenericObject> record = PulsarRecord.<GenericRecord>builder()
                 .message(message)
                 .topicName("fake_topic_name")
