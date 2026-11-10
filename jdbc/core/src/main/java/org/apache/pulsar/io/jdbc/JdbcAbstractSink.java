@@ -98,10 +98,13 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
     private SinkContext sinkContext;
     private Properties connectionProperties;
     private final AtomicReference<State> state = new AtomicReference<>(State.OPEN);
-    // Timed-out queue waits since the last "queue is full" warning, and when (System.nanoTime(),
-    // 0 if never) that warning was logged
+    // Timed-out queue waits since the last "queue is full" warning (reset once a blocked write()
+    // gets queue space), and when (System.nanoTime()) that warning was logged. The latter starts
+    // one warn interval in the past so that the first warning is logged at once: nanoTime() has
+    // no value that could mean "never".
     private final AtomicLong queueFullTimeouts = new AtomicLong();
-    private final AtomicLong queueFullLastWarnNanos = new AtomicLong();
+    private final AtomicLong queueFullLastWarnNanos =
+            new AtomicLong(System.nanoTime() - TimeUnit.SECONDS.toNanos(QUEUE_FULL_WARN_INTERVAL_SECONDS));
 
     @Override
     public void open(Map<String, Object> config, SinkContext sinkContext) throws Exception {
@@ -288,6 +291,7 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
         // overwrite a newer row. The offer is timed only so that a waiting write() notices when
         // the sink is closed or fails.
         try {
+            boolean timedOut = false;
             while (!incomingList.offer(record, QUEUE_OFFER_INTERVAL_SECONDS, TimeUnit.SECONDS)) {
                 current = state.get();
                 if (current != State.OPEN) {
@@ -295,9 +299,15 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
                     record.fail();
                     return;
                 }
+                timedOut = true;
                 logQueueFullTimeout();
                 // Safety net: schedule a flush, so that a full queue drains even when none is due
                 scheduleFlush();
+            }
+            if (timedOut) {
+                // The queue had space again, so a later full-queue warning does not count the
+                // timeouts of this wait
+                queueFullTimeouts.set(0);
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -356,7 +366,7 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
         }
         long now = System.nanoTime();
         long lastWarn = queueFullLastWarnNanos.get();
-        if ((lastWarn == 0 || now - lastWarn >= TimeUnit.SECONDS.toNanos(QUEUE_FULL_WARN_INTERVAL_SECONDS))
+        if (now - lastWarn >= TimeUnit.SECONDS.toNanos(QUEUE_FULL_WARN_INTERVAL_SECONDS)
                 && queueFullLastWarnNanos.compareAndSet(lastWarn, now)) {
             log.warn("Internal queue is full (capacity {}), blocking writes until space frees up; "
                     + "{} wait(s) of {} s timed out since the last warning",
