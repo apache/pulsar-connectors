@@ -859,6 +859,31 @@ public class SqliteJdbcSinkQueueTest {
         Assert.assertTrue(queue().isEmpty());
     }
 
+    /**
+     * Test that open() clears a pending on-demand flush left over from before, e.g. by a close()
+     * that timed out and discarded it: write() would otherwise never schedule a flush. The flag is
+     * set before open() rather than left by a real close(): open() does not reset the CLOSED state,
+     * so a closed sink cannot be reused.
+     */
+    @Test
+    public void testOpenClearsPendingFlush() throws Exception {
+        sink = new SqliteJdbcAutoSchemaSink();
+        ((AtomicBoolean) FieldUtils.readField(sink, "flushPending", true)).set(true);
+        sink.open(createConfig(2, -1), null);
+        mockInsertStatement(() -> { });
+        AtomicLong acked = new AtomicLong();
+        AtomicLong failed = new AtomicLong();
+        Record<GenericObject> record = createCountingRecord(acked, failed);
+
+        sink.write(record);
+        sink.write(record);
+        awaitScheduledFlushes();
+
+        Assert.assertEquals(acked.get(), 2L);
+        Assert.assertEquals(failed.get(), 0L);
+        Assert.assertTrue(queue().isEmpty());
+    }
+
     @DataProvider(name = "maxQueueSizes")
     public Object[] maxQueueSizes() {
         // Unbounded, and two batches, so that write() regularly waits for space

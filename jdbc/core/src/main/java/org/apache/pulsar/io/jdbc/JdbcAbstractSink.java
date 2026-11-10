@@ -158,6 +158,9 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
             incomingList = new LinkedBlockingDeque<>();
         }
         isFlushing = new AtomicBoolean(false);
+        // A close() that interrupted the in-flight flush discards a pending flush and leaves the
+        // flag set, which would stop write() from scheduling a flush on the new executor
+        flushPending.set(false);
 
         flushExecutor = Executors.newScheduledThreadPool(1);
         if (timeoutMs > 0) {
