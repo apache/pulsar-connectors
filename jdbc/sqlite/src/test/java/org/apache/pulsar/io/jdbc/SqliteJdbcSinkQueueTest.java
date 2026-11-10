@@ -213,6 +213,37 @@ public class SqliteJdbcSinkQueueTest {
     }
 
     /**
+     * Test that a failed flush moves the sink to FAILED without a SinkContext too, so that a write()
+     * blocked on a full queue fails its record instead of waiting for flushes that must not run.
+     */
+    @Test
+    public void testBlockedWriteFailsWhenFlushFailsWithoutSinkContext() throws Exception {
+        openSink(createConfig(2, 2), null);
+        blockFlushes(1);
+        List<CompletableFuture<Boolean>> results = new ArrayList<>();
+        List<Record<GenericObject>> records = createRecords(5, results);
+
+        // A full batch starts a flush that gets stuck. Fill the queue directly, so that no other
+        // flush is scheduled.
+        sink.write(records.get(0));
+        sink.write(records.get(1));
+        Assert.assertTrue(flushBlocked.await(10, TimeUnit.SECONDS));
+        queue().addAll(records.subList(2, 4));
+        CompletableFuture<Boolean> writeDone = new CompletableFuture<>();
+        awaitBlockedInWrite(startWriter(records.get(4), writeDone));
+        releaseFlush.countDown();
+        writeDone.get(10, TimeUnit.SECONDS);
+
+        Assert.assertEquals(FieldUtils.readField(sink, "state", true).toString(), "FAILED");
+        Assert.assertFalse(results.get(4).get(1, TimeUnit.SECONDS));
+        Assert.assertFalse(results.get(0).get(1, TimeUnit.SECONDS));
+        Assert.assertFalse(results.get(1).get(1, TimeUnit.SECONDS));
+        // Left for close(), not written by a later flush
+        Assert.assertEquals(new ArrayList<>(queue()), records.subList(2, 4));
+        Assert.assertFalse(results.get(2).isDone() || results.get(3).isDone());
+    }
+
+    /**
      * Test that a flush scheduled before another flush fails does not run once the sink is FAILED.
      * It would ack records newer than the failed batch, which the redelivered older records could
      * then overwrite (e.g. in UPSERT mode).

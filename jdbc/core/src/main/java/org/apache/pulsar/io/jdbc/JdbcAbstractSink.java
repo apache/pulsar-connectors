@@ -648,20 +648,24 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
     }
 
     /**
-     * Signal a fatal exception to the framework.
-     * This will cause the function instance to terminate properly.
+     * Move an OPEN sink to FAILED, stop the time-based flush and signal the fatal exception to the
+     * framework, which terminates the function instance properly. Without a SinkContext the sink
+     * still becomes FAILED, so that it stops flushing and write() fails records instead of
+     * blocking on a queue that is no longer flushed. Does nothing if the sink is not OPEN.
      *
      * @param e the fatal exception
      */
     private void fatal(Throwable e) {
-        if (sinkContext != null && state.compareAndSet(State.OPEN, State.FAILED)) {
+        if (state.compareAndSet(State.OPEN, State.FAILED)) {
             log.error("Fatal error in JDBC sink, signaling framework for shutdown", e);
             // close() may clear the field concurrently
             ScheduledFuture<?> flushTask = scheduledFlushTask;
             if (flushTask != null) {
                 flushTask.cancel(false);
             }
-            sinkContext.fatal(e);
+            if (sinkContext != null) {
+                sinkContext.fatal(e);
+            }
         }
     }
 
