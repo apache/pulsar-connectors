@@ -19,15 +19,18 @@
 package org.apache.pulsar.io.jdbc;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
+import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.Deque;
 import java.util.HashMap;
@@ -47,6 +50,7 @@ import org.apache.pulsar.client.api.schema.GenericObject;
 import org.apache.pulsar.functions.api.Record;
 import org.apache.pulsar.io.core.SinkContext;
 import org.apache.pulsar.io.jdbc.SqliteJdbcSinkTest.Foo;
+import org.mockito.ArgumentCaptor;
 import org.testng.Assert;
 import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeMethod;
@@ -235,6 +239,79 @@ public class SqliteJdbcSinkQueueTest {
         Assert.assertFalse(results.get(1).get(1, TimeUnit.SECONDS));
         Assert.assertEquals(new ArrayList<>(queue()), records.subList(2, 4), "A flush ran after fatal()");
         Assert.assertFalse(results.get(2).isDone() || results.get(3).isDone());
+    }
+
+    /**
+     * Test that a failed flush still fails the other records of the batch, rolls back and calls
+     * fatal() when Record.fail() throws, as the Pulsar source's fail function does under
+     * EFFECTIVELY_ONCE.
+     */
+    @Test
+    public void testFailedFlushContinuesWhenRecordFailThrows() throws Exception {
+        SinkContext sinkContext = mock(SinkContext.class);
+        openSink(createConfig(3, -1), sinkContext);
+        Connection realConnection = sink.getConnection();
+        Connection connection = mock(Connection.class);
+        when(connection.isValid(anyInt())).thenReturn(true);
+        FieldUtils.writeField(sink, "connection", connection, true);
+        PreparedStatement statement = mock(PreparedStatement.class);
+        when(statement.execute()).thenThrow(new SQLException("Simulated database failure"));
+        FieldUtils.writeField(sink, "insertStatement", statement, true);
+        List<CompletableFuture<Boolean>> results = new ArrayList<>();
+        List<Record<GenericObject>> records = createRecords(3, results);
+        RuntimeException failError = new RuntimeException("Simulated fail() failure");
+        // The first record of the batch is failed first
+        records.set(0, failThrows(records.get(0), failError));
+
+        for (Record<GenericObject> record : records) {
+            sink.write(record);
+        }
+        awaitScheduledFlushes();
+
+        ArgumentCaptor<Throwable> fatalError = ArgumentCaptor.forClass(Throwable.class);
+        verify(sinkContext).fatal(fatalError.capture());
+        Assert.assertTrue(fatalError.getValue() instanceof SQLException);
+        Assert.assertEquals(fatalError.getValue().getSuppressed(), new Throwable[] {failError});
+        verify(connection).rollback();
+        Assert.assertEquals(FieldUtils.readField(sink, "state", true).toString(), "FAILED");
+        for (CompletableFuture<Boolean> result : results) {
+            Assert.assertFalse(result.get(1, TimeUnit.SECONDS));
+        }
+        realConnection.close();
+    }
+
+    /**
+     * Test that a JDBC batch with a failed item still fails all the records and calls fatal() when
+     * Record.fail() throws, both in executeBatch() and in the flush error handling, here with the
+     * same exception instance.
+     */
+    @Test
+    public void testFailedJdbcBatchContinuesWhenRecordFailThrows() throws Exception {
+        SinkContext sinkContext = mock(SinkContext.class);
+        Map<String, Object> conf = createConfig(3, -1);
+        conf.put("useJdbcBatch", true);
+        openSink(conf, sinkContext);
+        PreparedStatement statement = mock(PreparedStatement.class);
+        when(statement.executeBatch()).thenReturn(new int[] {Statement.EXECUTE_FAILED, 1, 1});
+        FieldUtils.writeField(sink, "insertStatement", statement, true);
+        List<CompletableFuture<Boolean>> results = new ArrayList<>();
+        List<Record<GenericObject>> records = createRecords(3, results);
+        // executeBatch() fails the records in order: the first fail() throws out of executeBatch(),
+        // the error handling fails the other records, and the second fail() throws the same instance
+        RuntimeException failError = new RuntimeException("Simulated fail() failure");
+        records.set(0, failThrows(records.get(0), failError));
+        records.set(1, failThrows(records.get(1), failError));
+
+        for (Record<GenericObject> record : records) {
+            sink.write(record);
+        }
+        awaitScheduledFlushes();
+
+        verify(sinkContext).fatal(failError);
+        Assert.assertEquals(FieldUtils.readField(sink, "state", true).toString(), "FAILED");
+        for (CompletableFuture<Boolean> result : results) {
+            Assert.assertFalse(result.get(1, TimeUnit.SECONDS));
+        }
     }
 
     @Test(expectedExceptions = IllegalArgumentException.class,
@@ -438,6 +515,18 @@ public class SqliteJdbcSinkQueueTest {
             records.add(SqliteJdbcSinkTest.createMockFooRecord(new Foo("f" + i, "f2", i), new HashMap<>(), result));
         }
         return records;
+    }
+
+    /**
+     * Wrap {@code record} so that fail() fails it and then throws {@code error}.
+     */
+    private static Record<GenericObject> failThrows(Record<GenericObject> record, RuntimeException error) {
+        Record<GenericObject> throwing = spy(record);
+        doAnswer(invocation -> {
+            invocation.callRealMethod();
+            throw error;
+        }).when(throwing).fail();
+        return throwing;
     }
 
     /**

@@ -473,7 +473,20 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
                             TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start),
                             swapList.size(),
                             e);
-                    swapList.forEach(Record::fail);
+                    // Record.fail() may throw (the Pulsar source's fail function always throws
+                    // under EFFECTIVELY_ONCE). Keep failing the other records and still roll back
+                    // and call fatal(). e may itself have been thrown by fail() in executeBatch(),
+                    // and a fail function may throw the same instance again, which
+                    // addSuppressed() rejects.
+                    for (Record<T> r : swapList) {
+                        try {
+                            r.fail();
+                        } catch (RuntimeException failEx) {
+                            if (failEx != e) {
+                                e.addSuppressed(failEx);
+                            }
+                        }
+                    }
                     try {
                         if (jdbcSinkConfig.isUseTransactions()) {
                             connection.rollback();
