@@ -371,8 +371,9 @@ public class SqliteJdbcSinkQueueTest {
     }
 
     /**
-     * Test that a failed flush still rolls back and calls fatal() when Record.fail() throws an
-     * Error, which failRecords() does not catch.
+     * Test that a failed flush still fails the other records of the batch, rolls back and calls
+     * fatal() when Record.fail() throws an Error. fatal() reports the flush error, with the Error
+     * suppressed.
      */
     @Test
     public void testFailedFlushCallsFatalWhenRecordFailThrowsError() throws Exception {
@@ -389,19 +390,32 @@ public class SqliteJdbcSinkQueueTest {
         Connection realConnection = sink.getConnection();
         FieldUtils.writeField(sink, "connection", connection, true);
         ScheduledFuture<?> periodicFlush = (ScheduledFuture<?>) FieldUtils.readField(sink, "scheduledFlushTask", true);
-        Record<GenericObject> throwingRecord = createRecord(() -> { }, () -> {
-            throw new StackOverflowError("Simulated Error from fail()");
+        AtomicLong acked = new AtomicLong();
+        AtomicLong failed = new AtomicLong();
+        AtomicLong throwingFails = new AtomicLong();
+        Error failError = new StackOverflowError("Simulated Error from fail()");
+        Record<GenericObject> throwingRecord = createRecord(acked::incrementAndGet, () -> {
+            throwingFails.incrementAndGet();
+            throw failError;
         });
+        Record<GenericObject> record = createCountingRecord(acked, failed);
 
+        // Queued while the flush thread is busy, so that one flush drains them as one batch, the
+        // throwing record first
         occupyFlushThread();
-        queue().add(throwingRecord);
+        queue().addAll(List.of(throwingRecord, record, record, record));
         releaseFlush.countDown();
         Awaitility.await().atMost(10, TimeUnit.SECONDS).untilAsserted(() ->
                 verify(sinkContext).fatal(flushError));
         awaitScheduledFlushes();
         FieldUtils.writeField(sink, "connection", realConnection, true);
 
+        Assert.assertEquals(flushError.getSuppressed(), new Throwable[] {failError});
         verify(connection).rollback();
+        Assert.assertEquals(throwingFails.get(), 1L);
+        Assert.assertEquals(failed.get(), 3L);
+        Assert.assertEquals(acked.get(), 0L);
+        Assert.assertTrue(queue().isEmpty());
         Assert.assertEquals(FieldUtils.readField(sink, "state", true).toString(), "FAILED");
         Assert.assertFalse(((AtomicBoolean) FieldUtils.readField(sink, "isFlushing", true)).get());
         Assert.assertTrue(periodicFlush.isCancelled());
@@ -859,6 +873,38 @@ public class SqliteJdbcSinkQueueTest {
         verify(record).fail();
         Assert.assertTrue(queue().isEmpty());
         Assert.assertTrue(flushExecutor.isShutdown());
+        Assert.assertTrue(connection.isClosed());
+    }
+
+    /**
+     * Test that close() still fails the other queued records and closes the connection when
+     * Record.fail() throws an Error, and then rethrows the Error.
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    public void testCloseRethrowsErrorFromRecordFailAfterCleanup() throws Exception {
+        openSink(createConfig(1000, -1), null);
+        Connection connection = sink.getConnection();
+        Error failError = new StackOverflowError("Simulated Error from fail()");
+        Record<GenericObject> throwingRecord = mock(Record.class);
+        doThrow(failError).when(throwingRecord).fail();
+        List<Record<GenericObject>> records = List.of(mock(Record.class), mock(Record.class));
+        // The throwing record is queued first, so it is failed first
+        sink.write(throwingRecord);
+        for (Record<GenericObject> record : records) {
+            sink.write(record);
+        }
+
+        SqliteJdbcAutoSchemaSink closing = sink;
+        sink = null;
+        Assert.assertSame(Assert.expectThrows(Error.class, closing::close), failError);
+
+        verify(throwingRecord).fail();
+        for (Record<GenericObject> record : records) {
+            verify(record).fail();
+            verify(record, never()).ack();
+        }
+        Assert.assertTrue(((Deque<?>) FieldUtils.readField(closing, "incomingList", true)).isEmpty());
         Assert.assertTrue(connection.isClosed());
     }
 

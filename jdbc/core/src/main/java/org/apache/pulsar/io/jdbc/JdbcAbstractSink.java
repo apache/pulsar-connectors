@@ -227,25 +227,30 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
                 flushExecutor = null;
             }
         } finally {
-            failQueuedRecords();
-            if (insertStatement != null) {
-                insertStatement.close();
-            }
-            if (updateStatement != null) {
-                updateStatement.close();
-            }
-            if (upsertStatement != null) {
-                upsertStatement.close();
-            }
-            if (deleteStatement != null) {
-                deleteStatement.close();
-            }
-            if (connection != null && jdbcSinkConfig.isUseTransactions()) {
-                connection.commit();
-            }
-            if (connection != null) {
-                connection.close();
-                connection = null;
+            // failQueuedRecords() rethrows an Error from Record.fail(), after failing every record.
+            // Close the statements and the connection before it propagates.
+            try {
+                failQueuedRecords();
+            } finally {
+                if (insertStatement != null) {
+                    insertStatement.close();
+                }
+                if (updateStatement != null) {
+                    updateStatement.close();
+                }
+                if (upsertStatement != null) {
+                    upsertStatement.close();
+                }
+                if (deleteStatement != null) {
+                    deleteStatement.close();
+                }
+                if (connection != null && jdbcSinkConfig.isUseTransactions()) {
+                    connection.commit();
+                }
+                if (connection != null) {
+                    connection.close();
+                    connection = null;
+                }
             }
         }
         log.info("Closed jdbc connection: {}", jdbcUrl);
@@ -289,35 +294,44 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
     /**
      * Remove up to {@code limit} records from the head of {@code records} and fail each of them.
      * A record is removed before it is failed, so it is never failed twice. Record.fail() may throw
-     * (the Pulsar source's fail function always throws under EFFECTIVELY_ONCE): the remaining
-     * records are still failed, and one warning with the first exception and the number of failing
-     * fail() calls is logged at the end.
+     * (the Pulsar source's fail function always throws under EFFECTIVELY_ONCE), even an Error: the
+     * remaining records are still failed, and one warning with the first exception and the number
+     * of failing fail() calls is logged at the end.
      *
-     * @param error the error the records are failed for, or null. Each exception thrown by fail()
-     *              is added to it as suppressed.
+     * @param error the error the records are failed for, or null. Each exception or Error thrown
+     *              by fail() is added to it as suppressed. Without it, the first Error thrown by
+     *              fail() is rethrown once every record has been failed.
      * @param description completes the warning, e.g. "queued while closing the sink"
      */
     private void failRecords(Queue<Record<T>> records, int limit, Throwable error, String description) {
         int failErrors = 0;
-        RuntimeException firstFailError = null;
+        Throwable firstFailError = null;
+        Error firstError = null;
         Record<T> record;
         for (int i = 0; i < limit && (record = records.poll()) != null; i++) {
             try {
                 record.fail();
-            } catch (RuntimeException failEx) {
+            } catch (Throwable failEx) {
                 if (firstFailError == null) {
                     firstFailError = failEx;
                 }
                 failErrors++;
-                // A fail function may throw the error the records are failed for (e.g. the
-                // exception a fail() call threw in executeBatch()), which addSuppressed() rejects
-                if (error != null && failEx != error) {
-                    error.addSuppressed(failEx);
+                if (error != null) {
+                    // A fail function may throw the error the records are failed for (e.g. the
+                    // exception a fail() call threw in executeBatch()), which addSuppressed() rejects
+                    if (failEx != error) {
+                        error.addSuppressed(failEx);
+                    }
+                } else if (failEx instanceof Error && firstError == null) {
+                    firstError = (Error) failEx;
                 }
             }
         }
         if (firstFailError != null) {
             log.warn("Record.fail() threw for {} record(s) {}", failErrors, description, firstFailError);
+        }
+        if (firstError != null) {
+            throw firstError;
         }
     }
 
@@ -608,9 +622,10 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
                             TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start),
                             swapList.size(),
                             e);
-                    // failRecords() keeps failing the other records when Record.fail() throws, and
-                    // adds the fail() exceptions to e as suppressed. The finally blocks still roll
-                    // back and call fatal() after an Error from fail() or rollback().
+                    // failRecords() keeps failing the other records when Record.fail() throws, even
+                    // an Error, and adds what fail() threw to e as suppressed. The finally blocks
+                    // still roll back and call fatal() should anything else throw, e.g. an Error
+                    // from rollback().
                     try {
                         failRecords(swapList, Integer.MAX_VALUE, e, "of the failed flush");
                     } finally {
