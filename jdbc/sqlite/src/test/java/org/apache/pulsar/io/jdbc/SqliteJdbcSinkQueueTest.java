@@ -302,8 +302,8 @@ public class SqliteJdbcSinkQueueTest {
      * Test that a failed flush still fails every record of the batch and calls fatal() when
      * Record.fail() throws, as the Pulsar source's fail function does under EFFECTIVELY_ONCE. The
      * flush is the periodic one: an exception escaping it would cancel it for good and leave the
-     * sink OPEN. With the JDBC batch API, the fail() error escapes executeBatch() and is what
-     * fatal() reports; otherwise fatal() reports the SQLException, with the fail() error suppressed.
+     * sink OPEN. fatal() reports the SQLException of the failed statement or JDBC batch, with the
+     * fail() error suppressed.
      */
     @Test(dataProvider = "useJdbcBatch")
     public void testFailedPeriodicFlushContinuesWhenRecordFailThrows(boolean useJdbcBatch) throws Exception {
@@ -347,12 +347,11 @@ public class SqliteJdbcSinkQueueTest {
         Throwable cause = fatalCause.get(10, TimeUnit.SECONDS);
         awaitScheduledFlushes();
 
+        Assert.assertTrue(cause instanceof SQLException, "fatal() called with " + cause);
         if (useJdbcBatch) {
-            Assert.assertSame(cause, failError);
-        } else {
-            Assert.assertTrue(cause instanceof SQLException, "fatal() called with " + cause);
-            Assert.assertEquals(cause.getSuppressed(), new Throwable[] {failError});
+            Assert.assertTrue(cause.getMessage().startsWith("Batch failed"), cause.getMessage());
         }
+        Assert.assertEquals(cause.getSuppressed(), new Throwable[] {failError});
         verify(sinkContext).fatal(any(Throwable.class));
         Assert.assertEquals(throwingFails.get(), 1L);
         Assert.assertEquals(failed.get(), 3L);
@@ -669,9 +668,9 @@ public class SqliteJdbcSinkQueueTest {
     }
 
     /**
-     * Test that a JDBC batch with a failed item still fails all the records and calls fatal() when
-     * Record.fail() throws, both in executeBatch() and in the flush error handling, here with the
-     * same exception instance.
+     * Test that a JDBC batch with a failed item still fails all the records and calls fatal() with
+     * the batch SQLException when Record.fail() throws, here the same exception instance for two
+     * records. Each fail() error is added to the SQLException as suppressed.
      */
     @Test
     public void testFailedJdbcBatchContinuesWhenRecordFailThrows() throws Exception {
@@ -684,22 +683,74 @@ public class SqliteJdbcSinkQueueTest {
         FieldUtils.writeField(sink, "insertStatement", statement, true);
         List<CompletableFuture<Boolean>> results = new ArrayList<>();
         List<Record<GenericObject>> records = createRecords(3, results);
-        // executeBatch() fails the records in order: the first fail() throws out of executeBatch(),
-        // the error handling fails the other records, and the second fail() throws the same instance
         RuntimeException failError = new RuntimeException("Simulated fail() failure");
         records.set(0, failThrows(records.get(0), failError));
         records.set(1, failThrows(records.get(1), failError));
+        records.set(2, spy(records.get(2)));
 
         for (Record<GenericObject> record : records) {
             sink.write(record);
         }
         awaitScheduledFlushes();
 
-        verify(sinkContext).fatal(failError);
+        ArgumentCaptor<Throwable> fatalError = ArgumentCaptor.forClass(Throwable.class);
+        verify(sinkContext).fatal(fatalError.capture());
+        Throwable cause = fatalError.getValue();
+        Assert.assertTrue(cause instanceof SQLException, "fatal() called with " + cause);
+        Assert.assertTrue(cause.getMessage().startsWith("Batch failed"), cause.getMessage());
+        Assert.assertEquals(cause.getSuppressed(), new Throwable[] {failError, failError});
         Assert.assertEquals(FieldUtils.readField(sink, "state", true).toString(), "FAILED");
-        for (CompletableFuture<Boolean> result : results) {
-            Assert.assertFalse(result.get(1, TimeUnit.SECONDS));
+        for (int i = 0; i < records.size(); i++) {
+            Assert.assertFalse(results.get(i).get(1, TimeUnit.SECONDS));
+            verify(records.get(i)).fail();
         }
+    }
+
+    /**
+     * Test that a JDBC batch with a failed item still fails every record once and calls fatal()
+     * with the batch SQLException when Record.fail() throws an Error, which is added to the
+     * SQLException as suppressed.
+     */
+    @Test
+    public void testFailedJdbcBatchCallsFatalWhenRecordFailThrowsError() throws Exception {
+        SinkContext sinkContext = mock(SinkContext.class);
+        Map<String, Object> conf = createConfig(4, -1);
+        conf.put("useJdbcBatch", true);
+        openSink(conf, sinkContext);
+        PreparedStatement statement = mock(PreparedStatement.class);
+        when(statement.executeBatch()).thenReturn(new int[] {1, Statement.EXECUTE_FAILED, 1, 1});
+        FieldUtils.writeField(sink, "insertStatement", statement, true);
+        AtomicLong acked = new AtomicLong();
+        AtomicLong failed = new AtomicLong();
+        AtomicLong throwingFails = new AtomicLong();
+        Error failError = new StackOverflowError("Simulated Error from fail()");
+        Record<GenericObject> throwingRecord = createRecord(acked::incrementAndGet, () -> {
+            throwingFails.incrementAndGet();
+            throw failError;
+        });
+        Record<GenericObject> record = createCountingRecord(acked, failed);
+
+        // The write() that completes the batch schedules the flush
+        queue().addAll(List.of(record, throwingRecord, record));
+        sink.write(record);
+        awaitScheduledFlushes();
+
+        ArgumentCaptor<Throwable> fatalError = ArgumentCaptor.forClass(Throwable.class);
+        verify(sinkContext).fatal(fatalError.capture());
+        Throwable cause = fatalError.getValue();
+        Assert.assertTrue(cause instanceof SQLException, "fatal() called with " + cause);
+        Assert.assertTrue(cause.getMessage().startsWith("Batch failed"), cause.getMessage());
+        Assert.assertEquals(cause.getSuppressed(), new Throwable[] {failError});
+        Assert.assertEquals(throwingFails.get(), 1L);
+        Assert.assertEquals(failed.get(), 3L);
+        Assert.assertEquals(acked.get(), 0L);
+        Assert.assertTrue(queue().isEmpty());
+        Assert.assertEquals(FieldUtils.readField(sink, "state", true).toString(), "FAILED");
+
+        sink.close();
+        sink = null;
+        Assert.assertEquals(throwingFails.get(), 1L);
+        Assert.assertEquals(failed.get(), 3L);
     }
 
     /**

@@ -317,8 +317,8 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
                 }
                 failErrors++;
                 if (error != null) {
-                    // A fail function may throw the error the records are failed for (e.g. the
-                    // exception a fail() call threw in executeBatch()), which addSuppressed() rejects
+                    // addSuppressed() rejects the error itself, which a fail function may throw
+                    // (e.g. the same instance a record's ack() threw)
                     if (failEx != error) {
                         error.addSuppressed(failEx);
                     }
@@ -730,12 +730,13 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
             if (useTransactions) {
                 connection.rollback();
             }
-            for (int r: results) {
-                swapList.removeFirst().fail();
-            }
             String msg = "Batch failed, got error results (error_code->count): " + failuresMapping;
-            // throwing an exception here means the main loop cycle will nack the messages in the next batch
-            throw new SQLException(msg);
+            SQLException batchError = new SQLException(msg);
+            // Keep failing when Record.fail() throws, so that batchError is reported to fatal(), with
+            // what fail() threw suppressed
+            failRecords(swapList, results.length, batchError, "of the failed JDBC batch");
+            // flush() catches this, fails the remaining records of this round and calls fatal()
+            throw batchError;
         }
     }
 
