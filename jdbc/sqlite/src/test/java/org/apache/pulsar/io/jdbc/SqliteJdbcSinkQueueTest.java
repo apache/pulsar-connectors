@@ -242,6 +242,41 @@ public class SqliteJdbcSinkQueueTest {
     }
 
     /**
+     * Test that a flush draining a backlog does not start another round once the sink is no longer
+     * OPEN, e.g. closed while a round was stuck. It would write and ack records that close() is
+     * failing. The remaining records are failed by close(), exactly once.
+     */
+    @Test
+    public void testFlushStopsBetweenRoundsWhenSinkClosed() throws Exception {
+        openSink(createConfig(2, -1), null);
+        blockFlushes(0);
+        List<CompletableFuture<Boolean>> results = new ArrayList<>();
+        List<Record<GenericObject>> records = createRecords(6, results);
+        for (int i = 2; i < 6; i++) {
+            records.set(i, spy(records.get(i)));
+        }
+        // Queue a backlog of three batches, so that the flush started by the last write() has
+        // more rounds to drain after the first one, which gets stuck
+        queue().addAll(records.subList(0, 5));
+        sink.write(records.get(5));
+        Assert.assertTrue(flushBlocked.await(10, TimeUnit.SECONDS));
+
+        // Like close() does first, without waiting for the flush
+        setState("CLOSED");
+        releaseFlush.countDown();
+        awaitScheduledFlushes();
+
+        Assert.assertTrue(results.get(0).get(1, TimeUnit.SECONDS));
+        Assert.assertTrue(results.get(1).get(1, TimeUnit.SECONDS));
+        Assert.assertEquals(new ArrayList<>(queue()), records.subList(2, 6), "Another round ran after close()");
+        sink.close();
+        for (int i = 2; i < 6; i++) {
+            verify(records.get(i)).fail();
+            verify(records.get(i), never()).ack();
+        }
+    }
+
+    /**
      * Test that a failed flush still fails the other records of the batch, rolls back and calls
      * fatal() when Record.fail() throws, as the Pulsar source's fail function does under
      * EFFECTIVELY_ONCE.
@@ -473,6 +508,15 @@ public class SqliteJdbcSinkQueueTest {
     @SuppressWarnings("unchecked")
     private Deque<Record<GenericObject>> queue() throws IllegalAccessException {
         return (Deque<Record<GenericObject>>) FieldUtils.readField(sink, "incomingList", true);
+    }
+
+    /**
+     * Set the state of the sink to the {@code JdbcAbstractSink.State} constant {@code name}.
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private void setState(String name) throws IllegalAccessException {
+        AtomicReference<Object> state = (AtomicReference<Object>) FieldUtils.readField(sink, "state", true);
+        state.set(Enum.valueOf((Class) state.get().getClass(), name));
     }
 
     /**

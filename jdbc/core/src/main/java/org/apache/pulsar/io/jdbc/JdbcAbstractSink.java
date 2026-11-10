@@ -393,6 +393,12 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
             do {
                 final Deque<Record<T>> swapList = new LinkedList<>();
 
+                // Re-check before each round: the sink may have been closed, or have failed,
+                // while the previous round was running. The records stay queued and close()
+                // fails them.
+                if (state.get() != State.OPEN) {
+                    return;
+                }
                 int drainSize = batchSize > 0 ? batchSize : Integer.MAX_VALUE;
                 incomingList.drainTo(swapList, drainSize);
                 if (swapList.isEmpty()) {
