@@ -32,6 +32,7 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
+import java.util.Queue;
 import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingDeque;
 import java.util.concurrent.RejectedExecutionException;
@@ -275,30 +276,48 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
     /**
      * Fail the records still in the queue. incomingList is null if open() did not get far enough
      * to create it. Records are polled one at a time rather than drained into a list so that a
-     * large (or unbounded) queue is not copied during shutdown.
-     * Record.fail() may throw (the Pulsar source's fail function always throws under
-     * EFFECTIVELY_ONCE). Keep draining so that close() can finish the cleanup; log once at the end.
+     * large (or unbounded) queue is not copied during shutdown. failRecords() keeps draining when
+     * Record.fail() throws, so that close() can finish the cleanup.
      */
     private void failQueuedRecords() {
         if (incomingList == null) {
             return;
         }
-        Record<T> remaining;
+        failRecords(incomingList, Integer.MAX_VALUE, null, "queued while closing the sink");
+    }
+
+    /**
+     * Remove up to {@code limit} records from the head of {@code records} and fail each of them.
+     * A record is removed before it is failed, so it is never failed twice. Record.fail() may throw
+     * (the Pulsar source's fail function always throws under EFFECTIVELY_ONCE): the remaining
+     * records are still failed, and one warning with the first exception and the number of failing
+     * fail() calls is logged at the end.
+     *
+     * @param error the error the records are failed for, or null. Each exception thrown by fail()
+     *              is added to it as suppressed.
+     * @param description completes the warning, e.g. "queued while closing the sink"
+     */
+    private void failRecords(Queue<Record<T>> records, int limit, Throwable error, String description) {
         int failErrors = 0;
         RuntimeException firstFailError = null;
-        while ((remaining = incomingList.poll()) != null) {
+        Record<T> record;
+        for (int i = 0; i < limit && (record = records.poll()) != null; i++) {
             try {
-                remaining.fail();
-            } catch (RuntimeException e) {
+                record.fail();
+            } catch (RuntimeException failEx) {
                 if (firstFailError == null) {
-                    firstFailError = e;
+                    firstFailError = failEx;
                 }
                 failErrors++;
+                // A fail function may throw the error the records are failed for (e.g. the
+                // exception a fail() call threw in executeBatch()), which addSuppressed() rejects
+                if (error != null && failEx != error) {
+                    error.addSuppressed(failEx);
+                }
             }
         }
         if (firstFailError != null) {
-            log.warn("Record.fail() threw for {} queued record(s) while closing the sink",
-                    failErrors, firstFailError);
+            log.warn("Record.fail() threw for {} record(s) {}", failErrors, description, firstFailError);
         }
     }
 
@@ -589,22 +608,11 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
                             TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start),
                             swapList.size(),
                             e);
-                    // Record.fail() may throw (the Pulsar source's fail function always throws
-                    // under EFFECTIVELY_ONCE). Keep failing the other records and still roll back
-                    // and call fatal(). e may itself have been thrown by fail() in executeBatch(),
-                    // and a fail function may throw the same instance again, which
-                    // addSuppressed() rejects. The finally blocks also cover an Error from fail()
-                    // or rollback().
+                    // failRecords() keeps failing the other records when Record.fail() throws, and
+                    // adds the fail() exceptions to e as suppressed. The finally blocks still roll
+                    // back and call fatal() after an Error from fail() or rollback().
                     try {
-                        for (Record<T> r : swapList) {
-                            try {
-                                r.fail();
-                            } catch (RuntimeException failEx) {
-                                if (failEx != e) {
-                                    e.addSuppressed(failEx);
-                                }
-                            }
-                        }
+                        failRecords(swapList, Integer.MAX_VALUE, e, "of the failed flush");
                     } finally {
                         try {
                             if (jdbcSinkConfig.isUseTransactions()) {
