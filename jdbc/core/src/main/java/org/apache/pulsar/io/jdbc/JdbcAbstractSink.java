@@ -85,6 +85,8 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
     // Minimum time close() waits for an in-flight flush before interrupting it. close() waits
     // at least twice timeoutMs.
     private static final long MIN_CLOSE_FLUSH_WAIT_MS = 5000;
+    // How long close() waits for an interrupted flush to stop
+    private static final long CLOSE_INTERRUPTED_FLUSH_WAIT_MS = 1000;
 
     protected JdbcUtils.TableDefinition tableDefinition;
 
@@ -214,12 +216,12 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
                     if (!flushExecutor.awaitTermination(awaitMs, TimeUnit.MILLISECONDS)) {
                         log.warn("In-flight flush did not finish within {} ms of closing the sink, "
                                 + "interrupting it", awaitMs);
-                        flushExecutor.shutdownNow();
+                        interruptFlush();
                     }
                 } catch (InterruptedException e) {
                     log.warn("Interrupted while waiting for the in-flight flush to finish, interrupting it");
                     Thread.currentThread().interrupt();
-                    flushExecutor.shutdownNow();
+                    interruptFlush();
                 }
                 flushExecutor = null;
             }
@@ -246,6 +248,28 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
             }
         }
         log.info("Closed jdbc connection: {}", jdbcUrl);
+    }
+
+    /**
+     * Interrupt the in-flight flush and wait for it to stop, so that close() does not fail the
+     * queue, close the statements and commit while the flush is still using them. An interrupt
+     * status the closing thread already has does not cut the wait short, and is restored after it.
+     */
+    private void interruptFlush() {
+        flushExecutor.shutdownNow();
+        boolean interrupted = Thread.interrupted();
+        try {
+            if (!flushExecutor.awaitTermination(CLOSE_INTERRUPTED_FLUSH_WAIT_MS, TimeUnit.MILLISECONDS)) {
+                log.error("Interrupted flush did not stop within {} ms, closing the sink anyway",
+                        CLOSE_INTERRUPTED_FLUSH_WAIT_MS);
+            }
+        } catch (InterruptedException e) {
+            interrupted = true;
+        } finally {
+            if (interrupted) {
+                Thread.currentThread().interrupt();
+            }
+        }
     }
 
     /**

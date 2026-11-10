@@ -569,6 +569,53 @@ public class SqliteJdbcSinkQueueTest {
     }
 
     /**
+     * Test that when the in-flight flush does not finish in time, close() interrupts it and waits
+     * for it to stop before failing the queued records and closing the connection. The flush
+     * notices the interrupt only after a while, like a JDBC call that is slow to give up.
+     */
+    @Test
+    public void testCloseWaitsForInterruptedFlush() throws Exception {
+        openSink(createConfig(2, -1), null);
+        mockInsertStatement(() -> {
+            flushBlocked.countDown();
+            try {
+                releaseFlush.await(30, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                long stopAt = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(200);
+                while (System.nanoTime() < stopAt) {
+                    Thread.onSpinWait();
+                }
+                throw new SQLException("Simulated interrupted statement", e);
+            }
+            throw new TimeoutException("Flush was not interrupted");
+        });
+        List<CompletableFuture<Boolean>> results = new ArrayList<>();
+        List<Record<GenericObject>> records = createRecords(4, results);
+        List<Integer> completionOrder = Collections.synchronizedList(new ArrayList<>());
+        for (int i = 0; i < results.size(); i++) {
+            int index = i;
+            results.get(i).thenRun(() -> completionOrder.add(index));
+        }
+        Connection connection = sink.getConnection();
+
+        // A full batch starts a flush that gets stuck. Queue another batch directly, so that no
+        // other flush is scheduled.
+        sink.write(records.get(0));
+        sink.write(records.get(1));
+        Assert.assertTrue(flushBlocked.await(10, TimeUnit.SECONDS));
+        queue().addAll(records.subList(2, 4));
+        sink.close();
+
+        // The interrupted flush failed its batch before close() failed the queued records
+        for (CompletableFuture<Boolean> result : results) {
+            Assert.assertFalse(result.get(1, TimeUnit.SECONDS));
+        }
+        Assert.assertEquals(completionOrder, List.of(0, 1, 2, 3));
+        Assert.assertTrue(queue().isEmpty());
+        Assert.assertTrue(connection.isClosed());
+    }
+
+    /**
      * Test that a failed flush still fails the other records of the batch, rolls back and calls
      * fatal() when Record.fail() throws, as the Pulsar source's fail function does under
      * EFFECTIVELY_ONCE.
