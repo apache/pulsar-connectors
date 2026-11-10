@@ -554,8 +554,7 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
                     log.debug("Starting flush, drained {} records, queue remaining: {}",
                             swapList.size(), incomingList.size());
                 }
-                needAnotherRound = batchSize > 0 && !incomingList.isEmpty()
-                        && incomingList.size() >= batchSize;
+                needAnotherRound = batchSize > 0 && incomingList.size() >= batchSize;
                 long start = System.nanoTime();
 
                 int count = 0;
