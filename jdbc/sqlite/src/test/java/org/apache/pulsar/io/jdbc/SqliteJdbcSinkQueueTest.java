@@ -27,30 +27,50 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.withSettings;
+import com.google.common.collect.ImmutableMap;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Random;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.LinkedBlockingDeque;
+import java.util.concurrent.RunnableScheduledFuture;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import org.apache.commons.lang3.reflect.FieldUtils;
+import org.apache.commons.lang3.reflect.MethodUtils;
+import org.apache.pulsar.client.api.Message;
 import org.apache.pulsar.client.api.schema.GenericObject;
+import org.apache.pulsar.client.api.schema.GenericRecord;
+import org.apache.pulsar.client.api.schema.SchemaDefinition;
+import org.apache.pulsar.client.impl.MessageImpl;
+import org.apache.pulsar.client.impl.schema.AutoConsumeSchema;
+import org.apache.pulsar.client.impl.schema.AvroSchema;
+import org.apache.pulsar.client.impl.schema.generic.GenericAvroSchema;
 import org.apache.pulsar.functions.api.Record;
+import org.apache.pulsar.functions.source.PulsarRecord;
 import org.apache.pulsar.io.core.SinkContext;
 import org.apache.pulsar.io.jdbc.SqliteJdbcSinkTest.Foo;
+import org.awaitility.Awaitility;
 import org.mockito.ArgumentCaptor;
 import org.testng.Assert;
 import org.testng.annotations.AfterMethod;
@@ -273,6 +293,274 @@ public class SqliteJdbcSinkQueueTest {
         Assert.assertFalse(results.get(2).isDone() || results.get(3).isDone());
     }
 
+    @DataProvider(name = "useJdbcBatch")
+    public Object[] useJdbcBatch() {
+        return new Object[] {false, true};
+    }
+
+    /**
+     * Test that a failed flush still fails every record of the batch and calls fatal() when
+     * Record.fail() throws, as the Pulsar source's fail function does under EFFECTIVELY_ONCE. The
+     * flush is the periodic one: an exception escaping it would cancel it for good and leave the
+     * sink OPEN. fatal() reports the SQLException of the failed statement or JDBC batch, with the
+     * fail() error suppressed.
+     */
+    @Test(dataProvider = "useJdbcBatch")
+    public void testFailedPeriodicFlushContinuesWhenRecordFailThrows(boolean useJdbcBatch) throws Exception {
+        SinkContext sinkContext = mock(SinkContext.class);
+        CompletableFuture<Throwable> fatalCause = new CompletableFuture<>();
+        doAnswer(invocation -> {
+            fatalCause.complete(invocation.getArgument(0));
+            return null;
+        }).when(sinkContext).fatal(any(Throwable.class));
+        // Only the periodic flush runs: batches never fill up
+        Map<String, Object> conf = createConfig(1000, -1);
+        conf.put("timeoutMs", 50);
+        conf.put("useJdbcBatch", useJdbcBatch);
+        openSink(conf, sinkContext);
+        if (useJdbcBatch) {
+            PreparedStatement statement = mock(PreparedStatement.class);
+            when(statement.executeBatch()).thenReturn(new int[] {Statement.EXECUTE_FAILED,
+                    Statement.EXECUTE_FAILED, Statement.EXECUTE_FAILED, Statement.EXECUTE_FAILED});
+            FieldUtils.writeField(sink, "insertStatement", statement, true);
+        } else {
+            mockInsertStatement(() -> {
+                throw new SQLException("Simulated database failure");
+            });
+        }
+        ScheduledFuture<?> periodicFlush = (ScheduledFuture<?>) FieldUtils.readField(sink, "scheduledFlushTask", true);
+        AtomicLong acked = new AtomicLong();
+        AtomicLong failed = new AtomicLong();
+        AtomicLong throwingFails = new AtomicLong();
+        RuntimeException failError = new RuntimeException("Simulated EFFECTIVELY_ONCE fail()");
+        Record<GenericObject> throwingRecord = createRecord(acked::incrementAndGet, () -> {
+            throwingFails.incrementAndGet();
+            throw failError;
+        });
+        Record<GenericObject> record = createCountingRecord(acked, failed);
+
+        // Queued while the flush thread is busy, so that one flush drains them as one batch, the
+        // throwing record first
+        occupyFlushThread();
+        queue().addAll(List.of(throwingRecord, record, record, record));
+        releaseFlush.countDown();
+        Throwable cause = fatalCause.get(10, TimeUnit.SECONDS);
+        awaitScheduledFlushes();
+
+        Assert.assertTrue(cause instanceof SQLException, "fatal() called with " + cause);
+        if (useJdbcBatch) {
+            Assert.assertTrue(cause.getMessage().startsWith("Batch failed"), cause.getMessage());
+        }
+        Assert.assertEquals(cause.getSuppressed(), new Throwable[] {failError});
+        verify(sinkContext).fatal(any(Throwable.class));
+        Assert.assertEquals(throwingFails.get(), 1L);
+        Assert.assertEquals(failed.get(), 3L);
+        Assert.assertEquals(acked.get(), 0L);
+        Assert.assertTrue(queue().isEmpty());
+        Assert.assertEquals(FieldUtils.readField(sink, "state", true).toString(), "FAILED");
+        Assert.assertFalse(((AtomicBoolean) FieldUtils.readField(sink, "isFlushing", true)).get());
+        // Cancelled by fatal(). An exception escaping the periodic flush would complete it
+        // exceptionally instead, without cancelling it.
+        Assert.assertTrue(periodicFlush.isCancelled());
+
+        sink.close();
+        sink = null;
+        Assert.assertEquals(throwingFails.get(), 1L);
+        Assert.assertEquals(failed.get(), 3L);
+    }
+
+    /**
+     * Test that a failed flush still fails the other records of the batch, rolls back and calls
+     * fatal() when Record.fail() throws an Error. fatal() reports the flush error, with the Error
+     * suppressed.
+     */
+    @Test
+    public void testFailedFlushCallsFatalWhenRecordFailThrowsError() throws Exception {
+        SinkContext sinkContext = mock(SinkContext.class);
+        Map<String, Object> conf = createConfig(1000, -1);
+        conf.put("timeoutMs", 50);
+        openSink(conf, sinkContext);
+        SQLException flushError = new SQLException("Simulated database failure");
+        mockInsertStatement(() -> {
+            throw flushError;
+        });
+        Connection connection = mock(Connection.class);
+        when(connection.isValid(anyInt())).thenReturn(true);
+        Connection realConnection = sink.getConnection();
+        FieldUtils.writeField(sink, "connection", connection, true);
+        ScheduledFuture<?> periodicFlush = (ScheduledFuture<?>) FieldUtils.readField(sink, "scheduledFlushTask", true);
+        AtomicLong acked = new AtomicLong();
+        AtomicLong failed = new AtomicLong();
+        AtomicLong throwingFails = new AtomicLong();
+        Error failError = new StackOverflowError("Simulated Error from fail()");
+        Record<GenericObject> throwingRecord = createRecord(acked::incrementAndGet, () -> {
+            throwingFails.incrementAndGet();
+            throw failError;
+        });
+        Record<GenericObject> record = createCountingRecord(acked, failed);
+
+        // Queued while the flush thread is busy, so that one flush drains them as one batch, the
+        // throwing record first
+        occupyFlushThread();
+        queue().addAll(List.of(throwingRecord, record, record, record));
+        releaseFlush.countDown();
+        Awaitility.await().atMost(10, TimeUnit.SECONDS).untilAsserted(() ->
+                verify(sinkContext).fatal(flushError));
+        awaitScheduledFlushes();
+        FieldUtils.writeField(sink, "connection", realConnection, true);
+
+        Assert.assertEquals(flushError.getSuppressed(), new Throwable[] {failError});
+        verify(connection).rollback();
+        Assert.assertEquals(throwingFails.get(), 1L);
+        Assert.assertEquals(failed.get(), 3L);
+        Assert.assertEquals(acked.get(), 0L);
+        Assert.assertTrue(queue().isEmpty());
+        Assert.assertEquals(FieldUtils.readField(sink, "state", true).toString(), "FAILED");
+        Assert.assertFalse(((AtomicBoolean) FieldUtils.readField(sink, "isFlushing", true)).get());
+        Assert.assertTrue(periodicFlush.isCancelled());
+    }
+
+    @DataProvider(name = "committingFlushes")
+    public Object[][] committingFlushes() {
+        // useJdbcBatch, useTransactions. Without the JDBC batch API and transactions, each record
+        // is acked right after its statement, before the next one is written.
+        return new Object[][] {{false, true}, {true, true}, {true, false}};
+    }
+
+    /**
+     * Test that when ack() throws for a record after the batch is committed, neither that record
+     * nor the committed records after it are failed, not even by close(): failing them could
+     * redeliver them after newer messages with the same key. They are left unacked, to be
+     * redelivered after the instance restarts, and fatal() reports the ack() error.
+     */
+    @Test(dataProvider = "committingFlushes")
+    public void testFailedAckAfterCommitLeavesCommittedRecordsUnacked(boolean useJdbcBatch, boolean useTransactions)
+            throws Exception {
+        SinkContext sinkContext = mock(SinkContext.class);
+        Map<String, Object> conf = createConfig(4, -1);
+        conf.put("useJdbcBatch", useJdbcBatch);
+        conf.put("useTransactions", useTransactions);
+        openSink(conf, sinkContext);
+        if (useJdbcBatch) {
+            PreparedStatement statement = mock(PreparedStatement.class);
+            when(statement.executeBatch()).thenReturn(new int[] {1, 1, 1, 1});
+            FieldUtils.writeField(sink, "insertStatement", statement, true);
+        } else {
+            mockInsertStatement(() -> { });
+        }
+        AtomicLong acked = new AtomicLong();
+        AtomicLong failed = new AtomicLong();
+        AtomicLong throwingAcks = new AtomicLong();
+        AtomicLong throwingFails = new AtomicLong();
+        RuntimeException ackError = new RuntimeException("Simulated ack() failure");
+        Record<GenericObject> throwingRecord = createRecord(() -> {
+            throwingAcks.incrementAndGet();
+            throw ackError;
+        }, throwingFails::incrementAndGet);
+        Record<GenericObject> record = createCountingRecord(acked, failed);
+
+        // The write() that completes the batch schedules the flush, the throwing record is first
+        queue().addAll(List.of(throwingRecord, record, record));
+        sink.write(record);
+        awaitScheduledFlushes();
+
+        verify(sinkContext).fatal(ackError);
+        Assert.assertEquals(throwingAcks.get(), 1L);
+        Assert.assertEquals(throwingFails.get(), 0L);
+        Assert.assertEquals(acked.get(), 0L);
+        Assert.assertEquals(failed.get(), 0L);
+        Assert.assertTrue(queue().isEmpty());
+        Assert.assertEquals(FieldUtils.readField(sink, "state", true).toString(), "FAILED");
+
+        sink.close();
+        sink = null;
+        Assert.assertEquals(throwingAcks.get(), 1L);
+        Assert.assertEquals(throwingFails.get(), 0L);
+        Assert.assertEquals(acked.get(), 0L);
+        Assert.assertEquals(failed.get(), 0L);
+    }
+
+    /**
+     * Test that when ack() throws after a JDBC batch is committed, the records of the round that
+     * are not written yet (here a following batch of deletes) are failed, while the committed
+     * records are left unacked.
+     */
+    @Test(dataProvider = "useTransactions")
+    public void testFailedAckAfterJdbcBatchFailsOnlyUnwrittenRecords(boolean useTransactions) throws Exception {
+        SinkContext sinkContext = mock(SinkContext.class);
+        Map<String, Object> conf = createConfig(4, -1);
+        conf.put("useJdbcBatch", true);
+        conf.put("useTransactions", useTransactions);
+        openSink(conf, sinkContext);
+        PreparedStatement insertStatement = mock(PreparedStatement.class);
+        when(insertStatement.executeBatch()).thenReturn(new int[] {1, 1});
+        FieldUtils.writeField(sink, "insertStatement", insertStatement, true);
+        PreparedStatement deleteStatement = mock(PreparedStatement.class);
+        FieldUtils.writeField(sink, "deleteStatement", deleteStatement, true);
+        AtomicLong acked = new AtomicLong();
+        AtomicLong insertsFailed = new AtomicLong();
+        AtomicLong deletesFailed = new AtomicLong();
+        RuntimeException ackError = new RuntimeException("Simulated ack() failure");
+        Record<GenericObject> throwingInsert = createRecord(() -> {
+            throw ackError;
+        }, insertsFailed::incrementAndGet);
+        Record<GenericObject> insert = createRecord(acked::incrementAndGet, insertsFailed::incrementAndGet);
+        Record<GenericObject> delete = createRecord("DELETE", acked::incrementAndGet, deletesFailed::incrementAndGet);
+
+        // The write() that completes the batch schedules the flush. The inserts are written as one
+        // JDBC batch when the first delete is reached.
+        queue().addAll(List.of(throwingInsert, insert, delete));
+        sink.write(delete);
+        awaitScheduledFlushes();
+
+        verify(sinkContext).fatal(ackError);
+        verify(deleteStatement, never()).executeBatch();
+        Assert.assertEquals(acked.get(), 0L);
+        Assert.assertEquals(insertsFailed.get(), 0L);
+        Assert.assertEquals(deletesFailed.get(), 2L);
+        Assert.assertTrue(queue().isEmpty());
+
+        sink.close();
+        sink = null;
+        Assert.assertEquals(acked.get(), 0L);
+        Assert.assertEquals(insertsFailed.get(), 0L);
+        Assert.assertEquals(deletesFailed.get(), 2L);
+    }
+
+    /**
+     * Test that a flush draining several batches does not start another round once the sink is no
+     * longer OPEN, e.g. because fatal() was called from another thread during the current round.
+     * The remaining records stay queued for close(), which fails each of them once.
+     */
+    @Test
+    public void testNoFlushRoundAfterFatal() throws Exception {
+        SinkContext sinkContext = mock(SinkContext.class);
+        openSink(createConfig(2, -1), sinkContext);
+        blockFlushes(0);
+        AtomicLong acked = new AtomicLong();
+        AtomicLong failed = new AtomicLong();
+        Record<GenericObject> record = createCountingRecord(acked, failed);
+
+        // Three batches are queued when the flush starts, so it needs more than one round
+        queue().addAll(Collections.nCopies(5, record));
+        sink.write(record);
+        Assert.assertTrue(flushBlocked.await(10, TimeUnit.SECONDS));
+        MethodUtils.invokeMethod(sink, true, "fatal", new SQLException("Simulated fatal error"));
+        releaseFlush.countDown();
+        awaitScheduledFlushes();
+
+        // The round in progress completes, no further round runs
+        Assert.assertEquals(acked.get(), 2L);
+        Assert.assertEquals(failed.get(), 0L);
+        Assert.assertEquals(queue().size(), 4, "A flush round ran after fatal()");
+        Assert.assertFalse(((AtomicBoolean) FieldUtils.readField(sink, "isFlushing", true)).get());
+
+        sink.close();
+        sink = null;
+        Assert.assertEquals(acked.get(), 2L);
+        Assert.assertEquals(failed.get(), 4L);
+    }
+
     /**
      * Test that a flush draining a backlog does not start another round once the sink is no longer
      * OPEN, e.g. closed while a round was stuck. It would write and ack records that close() is
@@ -361,6 +649,53 @@ public class SqliteJdbcSinkQueueTest {
     }
 
     /**
+     * Test that when the in-flight flush does not finish in time, close() interrupts it and waits
+     * for it to stop before failing the queued records and closing the connection. The flush
+     * notices the interrupt only after a while, like a JDBC call that is slow to give up.
+     */
+    @Test
+    public void testCloseWaitsForInterruptedFlush() throws Exception {
+        openSink(createConfig(2, -1), null);
+        mockInsertStatement(() -> {
+            flushBlocked.countDown();
+            try {
+                releaseFlush.await(30, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                long stopAt = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(200);
+                while (System.nanoTime() < stopAt) {
+                    Thread.onSpinWait();
+                }
+                throw new SQLException("Simulated interrupted statement", e);
+            }
+            throw new TimeoutException("Flush was not interrupted");
+        });
+        List<CompletableFuture<Boolean>> results = new ArrayList<>();
+        List<Record<GenericObject>> records = createRecords(4, results);
+        List<Integer> completionOrder = Collections.synchronizedList(new ArrayList<>());
+        for (int i = 0; i < results.size(); i++) {
+            int index = i;
+            results.get(i).thenRun(() -> completionOrder.add(index));
+        }
+        Connection connection = sink.getConnection();
+
+        // A full batch starts a flush that gets stuck. Queue another batch directly, so that no
+        // other flush is scheduled.
+        sink.write(records.get(0));
+        sink.write(records.get(1));
+        Assert.assertTrue(flushBlocked.await(10, TimeUnit.SECONDS));
+        queue().addAll(records.subList(2, 4));
+        sink.close();
+
+        // The interrupted flush failed its batch before close() failed the queued records
+        for (CompletableFuture<Boolean> result : results) {
+            Assert.assertFalse(result.get(1, TimeUnit.SECONDS));
+        }
+        Assert.assertEquals(completionOrder, List.of(0, 1, 2, 3));
+        Assert.assertTrue(queue().isEmpty());
+        Assert.assertTrue(connection.isClosed());
+    }
+
+    /**
      * Test that a failed flush still fails the other records of the batch, rolls back and calls
      * fatal() when Record.fail() throws, as the Pulsar source's fail function does under
      * EFFECTIVELY_ONCE.
@@ -400,9 +735,9 @@ public class SqliteJdbcSinkQueueTest {
     }
 
     /**
-     * Test that a JDBC batch with a failed item still fails all the records and calls fatal() when
-     * Record.fail() throws, both in executeBatch() and in the flush error handling, here with the
-     * same exception instance.
+     * Test that a JDBC batch with a failed item still fails all the records and calls fatal() with
+     * the batch SQLException when Record.fail() throws, here the same exception instance for two
+     * records. Each fail() error is added to the SQLException as suppressed.
      */
     @Test
     public void testFailedJdbcBatchContinuesWhenRecordFailThrows() throws Exception {
@@ -415,22 +750,190 @@ public class SqliteJdbcSinkQueueTest {
         FieldUtils.writeField(sink, "insertStatement", statement, true);
         List<CompletableFuture<Boolean>> results = new ArrayList<>();
         List<Record<GenericObject>> records = createRecords(3, results);
-        // executeBatch() fails the records in order: the first fail() throws out of executeBatch(),
-        // the error handling fails the other records, and the second fail() throws the same instance
         RuntimeException failError = new RuntimeException("Simulated fail() failure");
         records.set(0, failThrows(records.get(0), failError));
         records.set(1, failThrows(records.get(1), failError));
+        records.set(2, spy(records.get(2)));
 
         for (Record<GenericObject> record : records) {
             sink.write(record);
         }
         awaitScheduledFlushes();
 
-        verify(sinkContext).fatal(failError);
+        ArgumentCaptor<Throwable> fatalError = ArgumentCaptor.forClass(Throwable.class);
+        verify(sinkContext).fatal(fatalError.capture());
+        Throwable cause = fatalError.getValue();
+        Assert.assertTrue(cause instanceof SQLException, "fatal() called with " + cause);
+        Assert.assertTrue(cause.getMessage().startsWith("Batch failed"), cause.getMessage());
+        Assert.assertEquals(cause.getSuppressed(), new Throwable[] {failError, failError});
         Assert.assertEquals(FieldUtils.readField(sink, "state", true).toString(), "FAILED");
-        for (CompletableFuture<Boolean> result : results) {
-            Assert.assertFalse(result.get(1, TimeUnit.SECONDS));
+        for (int i = 0; i < records.size(); i++) {
+            Assert.assertFalse(results.get(i).get(1, TimeUnit.SECONDS));
+            verify(records.get(i)).fail();
         }
+    }
+
+    /**
+     * Test that a JDBC batch with a failed item still fails every record once and calls fatal()
+     * with the batch SQLException when Record.fail() throws an Error, which is added to the
+     * SQLException as suppressed.
+     */
+    @Test
+    public void testFailedJdbcBatchCallsFatalWhenRecordFailThrowsError() throws Exception {
+        SinkContext sinkContext = mock(SinkContext.class);
+        Map<String, Object> conf = createConfig(4, -1);
+        conf.put("useJdbcBatch", true);
+        openSink(conf, sinkContext);
+        PreparedStatement statement = mock(PreparedStatement.class);
+        when(statement.executeBatch()).thenReturn(new int[] {1, Statement.EXECUTE_FAILED, 1, 1});
+        FieldUtils.writeField(sink, "insertStatement", statement, true);
+        AtomicLong acked = new AtomicLong();
+        AtomicLong failed = new AtomicLong();
+        AtomicLong throwingFails = new AtomicLong();
+        Error failError = new StackOverflowError("Simulated Error from fail()");
+        Record<GenericObject> throwingRecord = createRecord(acked::incrementAndGet, () -> {
+            throwingFails.incrementAndGet();
+            throw failError;
+        });
+        Record<GenericObject> record = createCountingRecord(acked, failed);
+
+        // The write() that completes the batch schedules the flush
+        queue().addAll(List.of(record, throwingRecord, record));
+        sink.write(record);
+        awaitScheduledFlushes();
+
+        ArgumentCaptor<Throwable> fatalError = ArgumentCaptor.forClass(Throwable.class);
+        verify(sinkContext).fatal(fatalError.capture());
+        Throwable cause = fatalError.getValue();
+        Assert.assertTrue(cause instanceof SQLException, "fatal() called with " + cause);
+        Assert.assertTrue(cause.getMessage().startsWith("Batch failed"), cause.getMessage());
+        Assert.assertEquals(cause.getSuppressed(), new Throwable[] {failError});
+        Assert.assertEquals(throwingFails.get(), 1L);
+        Assert.assertEquals(failed.get(), 3L);
+        Assert.assertEquals(acked.get(), 0L);
+        Assert.assertTrue(queue().isEmpty());
+        Assert.assertEquals(FieldUtils.readField(sink, "state", true).toString(), "FAILED");
+
+        sink.close();
+        sink = null;
+        Assert.assertEquals(throwingFails.get(), 1L);
+        Assert.assertEquals(failed.get(), 3L);
+    }
+
+    /**
+     * Test that write() does not schedule one flush per record while a flush is in progress. While
+     * the only flush thread is stuck, the executor queue must hold just the periodic flush and one
+     * pending on-demand flush, and that flush must drain everything written in the meantime.
+     */
+    @Test
+    public void testOnDemandFlushesCoalescedWhileFlushIsBlocked() throws Exception {
+        final int recordCount = 2000;
+        Map<String, Object> conf = createConfig(1, -1);
+        // Schedule the periodic flush, with an interval that does not elapse during the test
+        conf.put("timeoutMs", (int) TimeUnit.MINUTES.toMillis(10));
+        openSink(conf, null);
+        blockFlushes(0);
+        ScheduledThreadPoolExecutor flushExecutor =
+                (ScheduledThreadPoolExecutor) FieldUtils.readField(sink, "flushExecutor", true);
+        AtomicLong acked = new AtomicLong();
+        AtomicLong failed = new AtomicLong();
+        Record<GenericObject> record = createCountingRecord(acked, failed);
+
+        // The first write starts a flush that gets stuck, holding the only flush thread
+        sink.write(record);
+        Assert.assertTrue(flushBlocked.await(10, TimeUnit.SECONDS));
+        for (int i = 1; i < recordCount; i++) {
+            sink.write(record);
+        }
+        List<Runnable> queuedTasks = new ArrayList<>(flushExecutor.getQueue());
+        long periodicTasks = queuedTasks.stream()
+                .filter(task -> ((RunnableScheduledFuture<?>) task).isPeriodic())
+                .count();
+        Assert.assertEquals(periodicTasks, 1L);
+        Assert.assertEquals(queuedTasks.size() - periodicTasks, 1L, "Expected one pending on-demand flush");
+
+        releaseFlush.countDown();
+        Awaitility.await().atMost(10, TimeUnit.SECONDS).untilAsserted(() ->
+                Assert.assertEquals(acked.get(), (long) recordCount));
+        Assert.assertEquals(failed.get(), 0L);
+        Assert.assertTrue(queue().isEmpty());
+    }
+
+    /**
+     * Test that open() clears a pending on-demand flush left over from before, e.g. by a close()
+     * that timed out and discarded it: write() would otherwise never schedule a flush. The flag is
+     * set before open() rather than left by a real close(): open() does not reset the CLOSED state,
+     * so a closed sink cannot be reused.
+     */
+    @Test
+    public void testOpenClearsPendingFlush() throws Exception {
+        sink = new SqliteJdbcAutoSchemaSink();
+        ((AtomicBoolean) FieldUtils.readField(sink, "flushPending", true)).set(true);
+        sink.open(createConfig(2, -1), null);
+        mockInsertStatement(() -> { });
+        AtomicLong acked = new AtomicLong();
+        AtomicLong failed = new AtomicLong();
+        Record<GenericObject> record = createCountingRecord(acked, failed);
+
+        sink.write(record);
+        sink.write(record);
+        awaitScheduledFlushes();
+
+        Assert.assertEquals(acked.get(), 2L);
+        Assert.assertEquals(failed.get(), 0L);
+        Assert.assertTrue(queue().isEmpty());
+    }
+
+    @DataProvider(name = "maxQueueSizes")
+    public Object[] maxQueueSizes() {
+        // Unbounded, and two batches, so that write() regularly waits for space
+        return new Object[] {-1, 10};
+    }
+
+    /**
+     * Test that coalescing on-demand flushes never leaves a full batch behind. Without a periodic
+     * flush, records only leave the queue through flushes scheduled by write(), so a lost wake-up
+     * would strand a full batch. Writes are paced irregularly so that they land at different points
+     * of a flush in progress. After every burst, the queue must drain below batchSize with all the
+     * other records acked (a partial batch legitimately waits for the next write).
+     */
+    @Test(dataProvider = "maxQueueSizes")
+    public void testNoFlushLostWhenWritesRaceWithFlush(int maxQueueSize) throws Exception {
+        final int batchSize = 5;
+        openSink(createConfig(batchSize, maxQueueSize), null);
+        mockInsertStatement(() -> spin(ThreadLocalRandom.current().nextInt(50)));
+        long seed = System.nanoTime();
+        Random random = new Random(seed);
+        AtomicLong acked = new AtomicLong();
+        AtomicLong failed = new AtomicLong();
+        Record<GenericObject> record = createCountingRecord(acked, failed);
+
+        long written = 0;
+        for (int burst = 0; burst < 50; burst++) {
+            int records = 1 + random.nextInt(8 * batchSize);
+            for (int i = 0; i < records; i++) {
+                sink.write(record);
+                if (random.nextInt(4) == 0) {
+                    spin(random.nextInt(100));
+                }
+            }
+            written += records;
+            long expected = written;
+            Awaitility.await()
+                    .pollDelay(Duration.ZERO)
+                    .pollInterval(Duration.ofMillis(1))
+                    .atMost(10, TimeUnit.SECONDS)
+                    .untilAsserted(() -> {
+                        // Read acked first: the sum can only reach the total written once no record
+                        // is being flushed and the queue has stopped changing
+                        long ackedSoFar = acked.get();
+                        int queued = queue().size();
+                        Assert.assertTrue(queued < batchSize, "A full batch was left unflushed, queue size: "
+                                + queued + ", seed: " + seed);
+                        Assert.assertEquals(ackedSoFar + queued, expected);
+                    });
+        }
+        Assert.assertEquals(failed.get(), 0L);
     }
 
     /**
@@ -513,6 +1016,38 @@ public class SqliteJdbcSinkQueueTest {
         verify(record).fail();
         Assert.assertTrue(queue().isEmpty());
         Assert.assertTrue(flushExecutor.isShutdown());
+        Assert.assertTrue(connection.isClosed());
+    }
+
+    /**
+     * Test that close() still fails the other queued records and closes the connection when
+     * Record.fail() throws an Error, and then rethrows the Error.
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    public void testCloseRethrowsErrorFromRecordFailAfterCleanup() throws Exception {
+        openSink(createConfig(1000, -1), null);
+        Connection connection = sink.getConnection();
+        Error failError = new StackOverflowError("Simulated Error from fail()");
+        Record<GenericObject> throwingRecord = mock(Record.class);
+        doThrow(failError).when(throwingRecord).fail();
+        List<Record<GenericObject>> records = List.of(mock(Record.class), mock(Record.class));
+        // The throwing record is queued first, so it is failed first
+        sink.write(throwingRecord);
+        for (Record<GenericObject> record : records) {
+            sink.write(record);
+        }
+
+        SqliteJdbcAutoSchemaSink closing = sink;
+        sink = null;
+        Assert.assertSame(Assert.expectThrows(Error.class, closing::close), failError);
+
+        verify(throwingRecord).fail();
+        for (Record<GenericObject> record : records) {
+            verify(record).fail();
+            verify(record, never()).ack();
+        }
+        Assert.assertTrue(((Deque<?>) FieldUtils.readField(closing, "incomingList", true)).isEmpty());
         Assert.assertTrue(connection.isClosed());
     }
 
@@ -677,13 +1212,40 @@ public class SqliteJdbcSinkQueueTest {
     }
 
     /**
+     * Occupy the single flush thread until releaseFlush is counted down, so that records can be
+     * queued without a flush draining part of them.
+     */
+    private void occupyFlushThread() throws Exception {
+        ((ScheduledExecutorService) FieldUtils.readField(sink, "flushExecutor", true)).submit(() -> {
+            flushBlocked.countDown();
+            return releaseFlush.await(30, TimeUnit.SECONDS);
+        });
+        Assert.assertTrue(flushBlocked.await(10, TimeUnit.SECONDS));
+    }
+
+    private interface StatementAction {
+        void run() throws Exception;
+    }
+
+    /**
+     * Replace the insert statement with a mock that runs {@code onExecute} on each execute().
+     */
+    private void mockInsertStatement(StatementAction onExecute) throws Exception {
+        PreparedStatement statement = mock(PreparedStatement.class);
+        when(statement.execute()).thenAnswer(invocation -> {
+            onExecute.run();
+            return false;
+        });
+        FieldUtils.writeField(sink, "insertStatement", statement, true);
+    }
+
+    /**
      * Replace the insert statement with a mock. Each execute() counts down flushBlocked and waits
      * for releaseFlush, then the first {@code failures} calls throw.
      */
     private void blockFlushes(int failures) throws Exception {
         AtomicInteger remainingFailures = new AtomicInteger(failures);
-        PreparedStatement statement = mock(PreparedStatement.class);
-        when(statement.execute()).thenAnswer(invocation -> {
+        mockInsertStatement(() -> {
             flushBlocked.countDown();
             if (!releaseFlush.await(30, TimeUnit.SECONDS)) {
                 throw new TimeoutException("Flush was never released");
@@ -691,9 +1253,7 @@ public class SqliteJdbcSinkQueueTest {
             if (remainingFailures.getAndDecrement() > 0) {
                 throw new SQLException("Simulated database failure");
             }
-            return false;
         });
-        FieldUtils.writeField(sink, "insertStatement", statement, true);
     }
 
     /**
@@ -720,6 +1280,44 @@ public class SqliteJdbcSinkQueueTest {
             throw error;
         }).when(throwing).fail();
         return throwing;
+    }
+
+    /**
+     * A record that counts its acks and fails. Tests that only count flushed records can write the
+     * same instance many times, which is much cheaper than building one record per write.
+     */
+    private static Record<GenericObject> createCountingRecord(AtomicLong acked, AtomicLong failed) {
+        return createRecord(acked::incrementAndGet, failed::incrementAndGet);
+    }
+
+    /**
+     * An INSERT record whose ack() and fail() run the given functions.
+     */
+    private static Record<GenericObject> createRecord(Runnable ackFunction, Runnable failFunction) {
+        return createRecord("INSERT", ackFunction, failFunction);
+    }
+
+    /**
+     * A record with the given ACTION whose ack() and fail() run the given functions.
+     */
+    @SuppressWarnings("unchecked")
+    private static Record<GenericObject> createRecord(String action, Runnable ackFunction, Runnable failFunction) {
+        AvroSchema<Foo> schema = AvroSchema.of(SchemaDefinition.<Foo>builder()
+                .withPojo(Foo.class).withAlwaysAllowNull(true).build());
+        AutoConsumeSchema autoConsumeSchema = new AutoConsumeSchema();
+        autoConsumeSchema.setSchema(schema);
+        GenericAvroSchema genericAvroSchema = new GenericAvroSchema(schema.getSchemaInfo());
+        Message<GenericRecord> message = mock(MessageImpl.class, withSettings().stubOnly());
+        when(message.getValue()).thenReturn(genericAvroSchema.decode(schema.encode(new Foo("f1", "f2", 1))));
+        when(message.getProperties()).thenReturn(ImmutableMap.of("ACTION", action));
+        Record<? extends GenericObject> record = PulsarRecord.<GenericRecord>builder()
+                .message(message)
+                .topicName("fake_topic_name")
+                .schema(autoConsumeSchema)
+                .ackFunction(ackFunction)
+                .failFunction(failFunction)
+                .build();
+        return (Record<GenericObject>) record;
     }
 
     /**
@@ -758,6 +1356,13 @@ public class SqliteJdbcSinkQueueTest {
                 throw new TimeoutException(thread.getName() + " did not block, state: " + thread.getState());
             }
             Thread.sleep(1);
+        }
+    }
+
+    private static void spin(long micros) {
+        long deadline = System.nanoTime() + TimeUnit.MICROSECONDS.toNanos(micros);
+        while (System.nanoTime() < deadline) {
+            Thread.onSpinWait();
         }
     }
 }
