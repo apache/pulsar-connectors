@@ -170,7 +170,7 @@ kafka-client = "4.1.1"
 confluent = "8.1.1"
 opensearch = "2.19.4"
 elasticsearch-java = "8.15.3"
-debezium = "3.4.3.Final"
+debezium = "3.7.1.Final"
 kubernetesclient = "23.0.0"
 # IO connector specific
 aerospike-client = "4.5.0"
@@ -472,7 +472,7 @@ opensearch-rest-high-level-client = { module = "org.opensearch.client:opensearch
 elasticsearch-java = { module = "co.elastic.clients:elasticsearch-java", version.ref = "elasticsearch-java" }
 # Debezium
 debezium-bom = { module = "io.debezium:debezium-bom", version.ref = "debezium" }
-debezium-core = { module = "io.debezium:debezium-core" }
+debezium-connector-common = { module = "io.debezium:debezium-connector-common" }
 debezium-connector-mysql = { module = "io.debezium:debezium-connector-mysql" }
 debezium-connector-mariadb = { module = "io.debezium:debezium-connector-mariadb" }
 debezium-connector-mongodb = { module = "io.debezium:debezium-connector-mongodb" }

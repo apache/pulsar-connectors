@@ -24,7 +24,10 @@ plugins {
 dependencies {
     implementation(libs.pulsar.io.core)
     implementation(project(":debezium:pulsar-io-debezium-core"))
-    implementation(libs.debezium.connector.oracle)
+    implementation(libs.debezium.connector.oracle) {
+        // connect-runtime comes from pulsar-io-debezium-core with the exclusions it needs
+        exclude(group = "org.apache.kafka", module = "connect-runtime")
+    }
 
     testImplementation(libs.testcontainers)
     testImplementation(libs.testcontainers.pulsar)

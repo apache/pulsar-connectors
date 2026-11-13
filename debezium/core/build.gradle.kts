@@ -23,7 +23,10 @@ plugins {
 
 dependencies {
     compileOnly(libs.pulsar.io.core)
-    api(libs.debezium.core)
+    api(libs.debezium.connector.common) {
+        // connect-runtime is declared below with the exclusions it needs
+        exclude(group = "org.apache.kafka", module = "connect-runtime")
+    }
     implementation(libs.guava)
     implementation(libs.commons.lang3)
     api(libs.pulsar.common)
@@ -44,6 +47,8 @@ dependencies {
 
     testImplementation(libs.pulsar.client)
     testImplementation(libs.pulsar.client.admin)
-    testImplementation(libs.debezium.connector.mysql)
+    testImplementation(libs.debezium.connector.mysql) {
+        exclude(group = "org.apache.kafka", module = "connect-runtime")
+    }
     testImplementation(libs.testcontainers.pulsar)
 }
