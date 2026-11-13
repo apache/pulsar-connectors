@@ -18,19 +18,21 @@
  */
 package org.apache.pulsar.io.kafka;
 
+import java.nio.charset.StandardCharsets;
 import java.util.Properties;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.common.serialization.ByteArraySerializer;
-import org.apache.kafka.common.serialization.StringSerializer;
+import org.apache.pulsar.client.api.Message;
 import org.apache.pulsar.functions.api.Record;
 import org.apache.pulsar.io.core.KeyValue;
 import org.apache.pulsar.io.core.annotations.Connector;
 import org.apache.pulsar.io.core.annotations.IOType;
 
 /**
- * Kafka sink should treat incoming messages as pure bytes. So we don't
- * apply schema into it.
+ * Kafka sink that forwards message keys and values as bytes without applying a schema.
+ * String keys retain their UTF-8 representation, while binary keys are forwarded without
+ * the Base64 encoding used in Pulsar's string key representation.
  */
 @Connector(
         name = "kafka",
@@ -39,18 +41,22 @@ import org.apache.pulsar.io.core.annotations.IOType;
         configClass = KafkaSinkConfig.class
 )
 @Slf4j
-public class KafkaBytesSink extends KafkaAbstractSink<String, byte[]> {
+public class KafkaBytesSink extends KafkaAbstractSink<byte[], byte[]> {
 
     @Override
     protected Properties beforeCreateProducer(Properties props) {
-        props.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
+        props.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class.getName());
         props.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class.getName());
         log.info("Created kafka producer on : {}", props.getOrDefault(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, ""));
         return props;
     }
 
     @Override
-    public KeyValue<String, byte[]> extractKeyValue(Record<byte[]> record) {
-        return new KeyValue<>(record.getKey().orElse(null), record.getValue());
+    public KeyValue<byte[], byte[]> extractKeyValue(Record<byte[]> record) {
+        byte[] key = record.getMessage()
+                .filter(message -> message.hasKey() && message.hasBase64EncodedKey())
+                .map(Message::getKeyBytes)
+                .orElseGet(() -> record.getKey().map(value -> value.getBytes(StandardCharsets.UTF_8)).orElse(null));
+        return new KeyValue<>(key, record.getValue());
     }
 }
