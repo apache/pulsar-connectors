@@ -105,7 +105,8 @@ public class KafkaSinkConfig implements Serializable {
     @FieldDoc(
             defaultValue = "org.apache.kafka.common.serialization.StringSerializer",
             help =
-                    "The serializer class for Kafka producer to serialize keys.")
+                    "The serializer class for Kafka producer to serialize keys. "
+                            + "KafkaBytesSink sets this to ByteArraySerializer to forward raw key bytes.")
     private String keySerializerClass = "org.apache.kafka.common.serialization.StringSerializer";
     @FieldDoc(
             defaultValue = "org.apache.kafka.common.serialization.ByteArraySerializer",
