@@ -13,3 +13,6 @@ build/
 
 # OS
 .DS_Store
+
+# SQLite databases left behind by an interrupted JDBC test run
+*.db
