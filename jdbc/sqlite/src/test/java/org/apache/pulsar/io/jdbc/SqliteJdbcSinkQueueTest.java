@@ -572,6 +572,40 @@ public class SqliteJdbcSinkQueueTest {
     }
 
     /**
+     * Test that under auto-commit no record of a failed JDBC batch is acked when the driver's update
+     * counts show no failed item among them, as sqlite-jdbc reports for an entry that returned
+     * rows: which items were written is unknown.
+     */
+    @Test
+    public void testFailedJdbcBatchWithoutFailedCountAcksNothing() throws Exception {
+        SinkContext sinkContext = mock(SinkContext.class);
+        Map<String, Object> conf = createConfig(3, -1);
+        conf.put("useJdbcBatch", true);
+        conf.put("useTransactions", false);
+        openSink(conf, sinkContext);
+        PreparedStatement statement = mock(PreparedStatement.class);
+        BatchUpdateException driverError = new BatchUpdateException("Simulated batch entry returning rows",
+                new int[] {1, 0, 0});
+        when(statement.executeBatch()).thenThrow(driverError);
+        FieldUtils.writeField(sink, "insertStatement", statement, true);
+        List<CompletableFuture<Boolean>> results = new ArrayList<>();
+        List<Record<GenericObject>> records = createRecords(3, results);
+
+        for (Record<GenericObject> record : records) {
+            sink.write(record);
+        }
+        awaitScheduledFlushes();
+
+        verify(sinkContext).fatal(driverError);
+        Assert.assertTrue(queue().isEmpty());
+        sink.close();
+        sink = null;
+        for (CompletableFuture<Boolean> result : results) {
+            Assert.assertFalse(result.isDone());
+        }
+    }
+
+    /**
      * Test that a successful JDBC batch acks only its own records when the driver reports more
      * update counts than records were batched, and does not report an error.
      */
