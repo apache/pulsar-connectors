@@ -89,9 +89,10 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
     private static final long MIN_CLOSE_FLUSH_WAIT_MS = 5000;
     // How long close() waits for an interrupted flush to stop
     private static final long CLOSE_INTERRUPTED_FLUSH_WAIT_MS = 1000;
-    // How many of the exceptions thrown by Record.fail() failRecords() adds to the flush error as
-    // suppressed. Under EFFECTIVELY_ONCE every fail() throws: without a cap, the error logged and
-    // passed to SinkContext.fatal() would carry one stack trace per failed record.
+    // How many exceptions thrown by Record.fail() failRecords() adds to a flush error as suppressed,
+    // across calls. Under EFFECTIVELY_ONCE every fail() throws: without a cap, the error logged and
+    // passed to SinkContext.fatal() would carry one stack trace per failed record. Errors thrown by
+    // fail() are always added.
     private static final int MAX_SUPPRESSED_FAIL_ERRORS = 5;
 
     protected JdbcUtils.TableDefinition tableDefinition;
@@ -306,15 +307,14 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
      * remaining records are still failed, and one warning with the first exception and the number
      * of failing fail() calls is logged at the end.
      *
-     * @param error the error the records are failed for, or null. The first
-     *              {@value #MAX_SUPPRESSED_FAIL_ERRORS} exceptions or Errors thrown by fail() are
-     *              added to it as suppressed. Without it, the first Error thrown by fail() is
-     *              rethrown once every record has been failed.
+     * @param error the error the records are failed for, or null. What fail() throws is added to
+     *              it as suppressed while it has fewer than {@value #MAX_SUPPRESSED_FAIL_ERRORS}
+     *              suppressed exceptions, and always if it is an Error. Without it, the first
+     *              Error thrown by fail() is rethrown once every record has been failed.
      * @param description completes the warning, e.g. "queued while closing the sink"
      */
     private void failRecords(Queue<Record<T>> records, int limit, Throwable error, String description) {
         int failErrors = 0;
-        int suppressed = 0;
         Throwable firstFailError = null;
         Error firstError = null;
         Record<T> record;
@@ -329,9 +329,11 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
                 if (error != null) {
                     // addSuppressed() rejects the error itself, which a fail function may throw
                     // (e.g. the same instance a record's ack() threw)
-                    if (failEx != error && suppressed < MAX_SUPPRESSED_FAIL_ERRORS) {
+                    // The cap counts what error already holds: flush() may fail the records of
+                    // one round in two calls with the same error
+                    if (failEx != error && (failEx instanceof Error
+                            || error.getSuppressed().length < MAX_SUPPRESSED_FAIL_ERRORS)) {
                         error.addSuppressed(failEx);
-                        suppressed++;
                     }
                 } else if (failEx instanceof Error && firstError == null) {
                     firstError = (Error) failEx;
@@ -565,7 +567,6 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
                 needAnotherRound = batchSize > 0 && incomingList.size() >= batchSize;
                 long start = System.nanoTime();
 
-                int count = 0;
                 try {
                     ensureConnection();
 
@@ -600,10 +601,9 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
                                 throw new IllegalArgumentException(msg);
                         }
                         bindValue(statement, mutation);
-                        count += 1;
                         if (jdbcSinkConfig.isUseJdbcBatch()) {
                             if (currentBatch != null && statement != currentBatch) {
-                                internalFlushBatch(swapList, currentBatch, batched, count, start);
+                                internalFlushBatch(swapList, currentBatch, batched, start);
                                 batched = 0;
                                 start = System.nanoTime();
                             }
@@ -619,7 +619,7 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
                     }
 
                     if (jdbcSinkConfig.isUseJdbcBatch()) {
-                        internalFlushBatch(swapList, currentBatch, batched, count, start);
+                        internalFlushBatch(swapList, currentBatch, batched, start);
                     } else {
                         internalFlush(swapList);
                     }
@@ -715,12 +715,7 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
             try {
                 swapList.removeFirst().ack();
             } catch (Throwable e) {
-                // poll() rather than removeFirst(): a driver may report more update counts than
-                // records were batched, and a NoSuchElementException would replace the ack() error
-                int unacked = 0;
-                for (int i = acked + 1; i < count && swapList.poll() != null; i++) {
-                    unacked++;
-                }
+                int unacked = removeWithoutAck(swapList, count - acked - 1);
                 log.warn("Record.ack() threw after the records were committed, leaving the {} committed "
                         + "record(s) after it unacked", unacked);
                 throw e;
@@ -728,16 +723,31 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
         }
     }
 
+    /**
+     * Remove up to {@code count} records from the head of {@code swapList} without acking or
+     * failing them, so that they are redelivered after fatal() restarts the instance. Stops at the
+     * end of {@code swapList}, so that an exception being handled is not replaced by a
+     * NoSuchElementException.
+     *
+     * @return the number of records removed
+     */
+    private int removeWithoutAck(Deque<Record<T>> swapList, int count) {
+        int removed = 0;
+        while (removed < count && swapList.poll() != null) {
+            removed++;
+        }
+        return removed;
+    }
+
     private void internalFlushBatch(
             Deque<Record<T>> swapList,
             PreparedStatement currentBatch,
             int batched,
-            int count,
             long start
     ) throws SQLException {
         executeBatch(swapList, currentBatch, batched);
         if (log.isDebugEnabled()) {
-            log.debug("Flushed {} messages in {} ms", count, (System.nanoTime() - start) / 1000 / 1000);
+            log.debug("Flushed {} messages in {} ms", batched, (System.nanoTime() - start) / 1000 / 1000);
         }
     }
 
@@ -745,7 +755,9 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
      * Execute the JDBC batch of the first {@code batched} records of {@code swapList}, then ack
      * them, or throw if the batch failed. With transactions, a failed batch is rolled back and its
      * records are failed. Under auto-commit, its items may be partly committed, so only the leading
-     * items the driver reports as successful are acked: see {@link #ackLeadingSuccesses}.
+     * items the driver reports as successful are acked: see {@link #ackLeadingSuccesses}. The
+     * number of update counts the driver returns is not trusted to match {@code batched}: acking
+     * more records would ack records of the round's next batch, which is not written yet.
      */
     private void executeBatch(Deque<Record<T>> swapList, PreparedStatement statement, int batched)
             throws SQLException {
@@ -753,9 +765,14 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
         final int[] results;
         try {
             results = statement.executeBatch();
-        } catch (BatchUpdateException e) {
+        } catch (SQLException e) {
             if (!useTransactions) {
-                ackLeadingSuccesses(swapList, e.getUpdateCounts(), batched, e);
+                // Not every driver throws a BatchUpdateException for a failed item: sqlite-jdbc
+                // throws a plain SQLiteException, after committing the items before it. Without
+                // update counts, which items were written is unknown, and none is acked.
+                int[] updateCounts = e instanceof BatchUpdateException
+                        ? ((BatchUpdateException) e).getUpdateCounts() : null;
+                ackLeadingSuccesses(swapList, updateCounts, batched, e);
             }
             // flush() catches e, fails the records left in swapList and calls fatal(). With
             // transactions, those include this batch's records, and it also rolls back.
@@ -768,8 +785,7 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
                 if (failuresMapping == null) {
                     failuresMapping = new HashMap<>();
                 }
-                final Integer current = failuresMapping.computeIfAbsent(r, code -> 1);
-                failuresMapping.put(r, current + 1);
+                failuresMapping.merge(r, 1, Integer::sum);
             }
         }
         if (failuresMapping == null || failuresMapping.isEmpty()) {
@@ -777,7 +793,7 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
                 connection.commit();
             }
             // Committed either way, with auto-commit by executeBatch()
-            ackCommitted(swapList, results.length);
+            ackCommitted(swapList, batched);
         } else {
             String msg = "Batch failed, got error results (error_code->count): " + failuresMapping;
             SQLException batchError = new SQLException(msg);
@@ -785,7 +801,7 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
                 connection.rollback();
                 // Keep failing when Record.fail() throws, so that batchError is reported to fatal(),
                 // with what fail() threw suppressed
-                failRecords(swapList, results.length, batchError, "of the failed JDBC batch");
+                failRecords(swapList, batched, batchError, "of the failed JDBC batch");
             } else {
                 ackLeadingSuccesses(swapList, results, batched, batchError);
             }
@@ -803,8 +819,11 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
      * a committed, newer item with the same key. fatal() restarts the instance and the unacked
      * records are then redelivered in order. Drivers either stop at the first failed item and
      * report fewer update counts, or continue and report {@link Statement#EXECUTE_FAILED}: in both
-     * cases the leading successful items are the ones before the first failure.
+     * cases the leading successful items are the ones before the first failure. If the counts
+     * show no failed item among the records of the batch, which items failed is unknown, and none
+     * is acked.
      *
+     * @param updateCounts the update counts the driver reported, or null if unknown
      * @param batched the number of records of the batch, the first ones in {@code swapList}
      * @param batchError the error the batch failed with. If ack() throws, what it threw is added
      *                   to it as suppressed, so that the batch failure is still the error reported
@@ -818,16 +837,18 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
                 succeeded++;
             }
         }
+        if (succeeded == batched) {
+            // The batch failed, but no item of it is reported as failed. sqlite-jdbc, for example,
+            // reports 0 for an entry that returned rows and for every entry after it.
+            succeeded = 0;
+        }
         try {
             // Removes the first succeeded records, even when ack() throws
             ackCommitted(swapList, succeeded);
         } catch (Throwable ackError) {
             batchError.addSuppressed(ackError);
         }
-        int unacked = 0;
-        for (int i = succeeded; i < batched && swapList.poll() != null; i++) {
-            unacked++;
-        }
+        int unacked = removeWithoutAck(swapList, batched - succeeded);
         log.warn("JDBC batch failed under auto-commit after {} successful item(s), leaving the {} other "
                 + "record(s) of the batch unacked to be redelivered", succeeded, unacked);
     }
