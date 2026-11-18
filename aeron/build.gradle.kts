@@ -31,6 +31,8 @@ dependencies {
     // the function runtime, so it is bundled in the NAR.
     implementation(libs.aeron.driver)
     implementation(libs.aeron.client)
+    // Archive mode: replay from a recording rather than the live transport.
+    implementation(libs.aeron.archive)
 
     // The container test drives records into a real broker to prove the full path.
     testImplementation(libs.testcontainers.pulsar)

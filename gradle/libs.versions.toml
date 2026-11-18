@@ -229,6 +229,8 @@ netty-reactive-streams = { module = "com.typesafe.netty:netty-reactive-streams",
 # the source connector does not need.
 aeron-client = { module = "io.aeron:aeron-client", version.ref = "aeron" }
 aeron-driver = { module = "io.aeron:aeron-driver", version.ref = "aeron" }
+# Aeron Archive: recording and replay, for the source's lossless archive mode.
+aeron-archive = { module = "io.aeron:aeron-archive", version.ref = "aeron" }
 # Protobuf / gRPC
 protobuf-bom = { module = "com.google.protobuf:protobuf-bom", version.ref = "protobuf" }
 protobuf-java = { module = "com.google.protobuf:protobuf-java" }
