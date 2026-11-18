@@ -29,6 +29,8 @@ dependencies {
     implementation(project(":aerospike"))
     implementation(project(":canal"))
     implementation(project(":cassandra"))
+    implementation(project(":cassandra-generic-record"))
+    implementation(project(":cassandra-json"))
     implementation(project(":debezium:pulsar-io-debezium-mariadb"))
     implementation(project(":debezium:pulsar-io-debezium-mysql"))
     implementation(project(":debezium:pulsar-io-debezium-postgres"))
