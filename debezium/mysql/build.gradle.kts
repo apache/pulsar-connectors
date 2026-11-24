@@ -24,7 +24,12 @@ plugins {
 dependencies {
     implementation(libs.pulsar.io.core)
     implementation(project(":debezium:pulsar-io-debezium-core"))
-    implementation(libs.debezium.connector.mysql)
+    // debezium-bom is applied only to the Debezium modules, see pulsar-connectors-dependencies
+    implementation(platform(libs.debezium.bom))
+    implementation(libs.debezium.connector.mysql) {
+        // connect-runtime comes from pulsar-io-debezium-core with the exclusions it needs
+        exclude(group = "org.apache.kafka", module = "connect-runtime")
+    }
 
     testImplementation(libs.testcontainers)
     testImplementation(libs.testcontainers.pulsar)

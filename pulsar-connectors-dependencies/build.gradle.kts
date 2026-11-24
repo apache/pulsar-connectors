@@ -29,6 +29,11 @@ javaPlatform {
     allowDependencies()
 }
 
+// BOMs that only some subprojects import themselves. debezium-bom manages far more than
+// Debezium (OpenTelemetry, Jetty, Testcontainers, the AWS SDK, ...), so importing it here
+// would let Debezium's versions leak into every connector.
+val subprojectScopedBoms = setOf("debezium.bom")
+
 dependencies {
     val catalog = project.extensions.getByType<VersionCatalogsExtension>().named("libs")
     // Iterate over all library declarations in the version catalog and add them as constraints.
@@ -40,7 +45,7 @@ dependencies {
         // These pin the same Maven coordinates to a different version than the shared
         // platform — including them here would declare two versions of the same module
         // and break consumers (e.g. alluxio uses jetty 9.x while everything else uses 12.x).
-        if (alias.endsWith(".override")) return@forEach
+        if (alias.endsWith(".override") || alias in subprojectScopedBoms) return@forEach
         catalog.findLibrary(alias).ifPresent { provider ->
             val dep = provider.get()
             if (alias.endsWith(".bom")) {
