@@ -38,6 +38,15 @@ import org.apache.pulsar.io.core.annotations.IOType;
 )
 public class PostgresJdbcAutoSchemaSink extends BaseJdbcAutoSchemaSink {
 
+    /**
+     * Under auto-commit, the update counts of the BatchUpdateException pgjdbc throws for a failed
+     * batch cover the items it committed before the failed one.
+     */
+    @Override
+    protected boolean reportsCommittedItemsOfFailedBatch() {
+        return true;
+    }
+
     @Override
     public String generateUpsertQueryStatement() {
         final List<JdbcUtils.ColumnId> keyColumns = tableDefinition.getKeyColumns();

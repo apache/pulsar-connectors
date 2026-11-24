@@ -631,8 +631,16 @@ public class SqliteJdbcSinkTest {
             Assert.assertTrue(future2.get(1, TimeUnit.SECONDS));
             Assert.assertTrue(future3.get(1, TimeUnit.SECONDS));
             Assert.assertTrue(future4.get(1, TimeUnit.SECONDS));
-            Assert.assertFalse(future5.get(1, TimeUnit.SECONDS));
+            // The future5 record's JDBC batch fails on the primary key. Under auto-commit the batch
+            // may be partly committed, and sqlite-jdbc reports the failure without update counts,
+            // so the sink neither acks nor fails its records: they are redelivered after fatal()
+            // restarts the instance.
             Assert.assertFalse(future6.get(1, TimeUnit.SECONDS));
+            if (jdbcSink.jdbcSinkConfig.isUseJdbcBatch()) {
+                Assert.assertFalse(future5.isDone());
+            } else {
+                Assert.assertFalse(future5.get(1, TimeUnit.SECONDS));
+            }
             System.out.println("dump:\n" + sqliteUtils.dump("select field1,field2,field3 from " + tableName));
 
             final int count = sqliteUtils.select("select field1,field2,field3 from "

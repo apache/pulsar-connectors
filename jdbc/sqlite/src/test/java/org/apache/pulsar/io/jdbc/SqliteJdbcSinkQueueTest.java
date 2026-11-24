@@ -29,6 +29,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.withSettings;
 import com.google.common.collect.ImmutableMap;
+import java.sql.BatchUpdateException;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
@@ -418,6 +419,311 @@ public class SqliteJdbcSinkQueueTest {
         Assert.assertEquals(FieldUtils.readField(sink, "state", true).toString(), "FAILED");
         Assert.assertFalse(((AtomicBoolean) FieldUtils.readField(sink, "isFlushing", true)).get());
         Assert.assertTrue(periodicFlush.isCancelled());
+    }
+
+    /**
+     * Test that a failed flush adds only the first few exceptions thrown by Record.fail() to the
+     * flush error as suppressed, while still failing every record exactly once. Under
+     * EFFECTIVELY_ONCE every fail() throws, and the flush error is logged and passed to fatal().
+     * An Error thrown by fail() is added even past the cap.
+     */
+    @Test
+    public void testFailedFlushCapsSuppressedFailErrors() throws Exception {
+        SinkContext sinkContext = mock(SinkContext.class);
+        int records = 8;
+        openSink(createConfig(records, -1), sinkContext);
+        SQLException flushError = new SQLException("Simulated database failure");
+        mockInsertStatement(() -> {
+            throw flushError;
+        });
+        AtomicLong acked = new AtomicLong();
+        AtomicLong throwingFails = new AtomicLong();
+        List<Record<GenericObject>> batch = new ArrayList<>();
+        for (int i = 0; i < records - 1; i++) {
+            RuntimeException failError = new RuntimeException("Simulated EFFECTIVELY_ONCE fail() " + i);
+            batch.add(createRecord(acked::incrementAndGet, () -> {
+                throwingFails.incrementAndGet();
+                throw failError;
+            }));
+        }
+        Error lastFailError = new StackOverflowError("Simulated Error from the last fail()");
+        batch.add(createRecord(acked::incrementAndGet, () -> {
+            throwingFails.incrementAndGet();
+            throw lastFailError;
+        }));
+
+        // The write() that completes the batch schedules the flush
+        queue().addAll(batch.subList(0, records - 1));
+        sink.write(batch.get(records - 1));
+        awaitScheduledFlushes();
+
+        verify(sinkContext).fatal(flushError);
+        Throwable[] suppressed = flushError.getSuppressed();
+        Assert.assertEquals(suppressed.length, 6);
+        Assert.assertEquals(suppressed[0].getMessage(), "Simulated EFFECTIVELY_ONCE fail() 0");
+        Assert.assertEquals(suppressed[4].getMessage(), "Simulated EFFECTIVELY_ONCE fail() 4");
+        Assert.assertSame(suppressed[5], lastFailError);
+        Assert.assertEquals(throwingFails.get(), records);
+        Assert.assertEquals(acked.get(), 0L);
+        Assert.assertTrue(queue().isEmpty());
+
+        sink.close();
+        sink = null;
+        Assert.assertEquals(throwingFails.get(), records);
+    }
+
+    /**
+     * Test that when a driver reports more update counts than records were added to the JDBC
+     * batch and ack() throws, fatal() reports the ack() error rather than a
+     * NoSuchElementException from removing the committed records left after it.
+     */
+    @Test
+    public void testFailedAckWithExtraUpdateCountsReportsAckError() throws Exception {
+        SinkContext sinkContext = mock(SinkContext.class);
+        Map<String, Object> conf = createConfig(4, -1);
+        conf.put("useJdbcBatch", true);
+        openSink(conf, sinkContext);
+        PreparedStatement statement = mock(PreparedStatement.class);
+        when(statement.executeBatch()).thenReturn(new int[] {1, 1, 1, 1, 1, 1});
+        FieldUtils.writeField(sink, "insertStatement", statement, true);
+        AtomicLong acked = new AtomicLong();
+        AtomicLong failed = new AtomicLong();
+        RuntimeException ackError = new RuntimeException("Simulated ack() failure");
+        Record<GenericObject> throwingRecord = createRecord(() -> {
+            throw ackError;
+        }, failed::incrementAndGet);
+        Record<GenericObject> record = createCountingRecord(acked, failed);
+
+        // The write() that completes the batch schedules the flush, the throwing record is first
+        queue().addAll(List.of(throwingRecord, record, record));
+        sink.write(record);
+        awaitScheduledFlushes();
+
+        verify(sinkContext).fatal(ackError);
+        Assert.assertEquals(acked.get(), 0L);
+        Assert.assertEquals(failed.get(), 0L);
+        Assert.assertTrue(queue().isEmpty());
+
+        sink.close();
+        sink = null;
+        Assert.assertEquals(acked.get(), 0L);
+        Assert.assertEquals(failed.get(), 0L);
+    }
+
+    @DataProvider(name = "partlyFailedJdbcBatches")
+    public Object[][] partlyFailedJdbcBatches() {
+        // useTransactions, whether executeBatch() throws a BatchUpdateException (the driver
+        // stopped at the failed item) rather than returning EXECUTE_FAILED for it
+        // and whether the sink trusts the driver's update counts of a failed batch
+        return new Object[][] {{false, false, true}, {false, true, true}, {true, false, true}, {true, true, true},
+                {false, false, false}, {false, true, false}};
+    }
+
+    /**
+     * Test a JDBC batch whose second item fails. Under auto-commit, the items the driver reports
+     * as successful before the failed one may be committed: they are acked, and the other records
+     * of the batch are neither acked nor failed, not even by close(), so that they are redelivered
+     * in order after fatal() restarts the instance. A sink that does not trust its driver's update
+     * counts of a failed batch acks none of them. With transactions, the batch is rolled back and
+     * all of its records are failed.
+     */
+    @Test(dataProvider = "partlyFailedJdbcBatches")
+    public void testPartlyFailedJdbcBatch(boolean useTransactions, boolean batchUpdateException,
+                                          boolean trustsUpdateCounts) throws Exception {
+        SinkContext sinkContext = mock(SinkContext.class);
+        Map<String, Object> conf = createConfig(3, -1);
+        conf.put("useJdbcBatch", true);
+        conf.put("useTransactions", useTransactions);
+        openSink(conf, sinkContext, trustsUpdateCounts);
+        PreparedStatement statement = mock(PreparedStatement.class);
+        BatchUpdateException driverError = new BatchUpdateException("Simulated failed batch item", new int[] {1});
+        if (batchUpdateException) {
+            when(statement.executeBatch()).thenThrow(driverError);
+        } else {
+            when(statement.executeBatch()).thenReturn(new int[] {1, Statement.EXECUTE_FAILED, 1});
+        }
+        FieldUtils.writeField(sink, "insertStatement", statement, true);
+        List<CompletableFuture<Boolean>> results = new ArrayList<>();
+        List<Record<GenericObject>> records = createRecords(3, results);
+
+        for (Record<GenericObject> record : records) {
+            sink.write(record);
+        }
+        awaitScheduledFlushes();
+
+        ArgumentCaptor<Throwable> fatalError = ArgumentCaptor.forClass(Throwable.class);
+        verify(sinkContext).fatal(fatalError.capture());
+        Throwable cause = fatalError.getValue();
+        if (batchUpdateException) {
+            Assert.assertSame(cause, driverError);
+        } else {
+            Assert.assertEquals(cause.getMessage(), "Batch failed, got error results (error_code->count): {"
+                    + Statement.EXECUTE_FAILED + "=1}");
+        }
+        Assert.assertTrue(queue().isEmpty());
+        sink.close();
+        sink = null;
+
+        if (useTransactions) {
+            for (CompletableFuture<Boolean> result : results) {
+                Assert.assertFalse(result.get(1, TimeUnit.SECONDS));
+            }
+        } else {
+            if (trustsUpdateCounts) {
+                Assert.assertTrue(results.get(0).get(1, TimeUnit.SECONDS));
+            } else {
+                Assert.assertFalse(results.get(0).isDone());
+            }
+            Assert.assertFalse(results.get(1).isDone());
+            Assert.assertFalse(results.get(2).isDone());
+        }
+    }
+
+    /**
+     * Test that under auto-commit no record of a failed JDBC batch is acked when the driver's update
+     * counts show no failed item among them, as sqlite-jdbc reports for an entry that returned
+     * rows: which items were written is unknown.
+     */
+    @Test
+    public void testFailedJdbcBatchWithoutFailedCountAcksNothing() throws Exception {
+        SinkContext sinkContext = mock(SinkContext.class);
+        Map<String, Object> conf = createConfig(3, -1);
+        conf.put("useJdbcBatch", true);
+        conf.put("useTransactions", false);
+        openSink(conf, sinkContext);
+        PreparedStatement statement = mock(PreparedStatement.class);
+        BatchUpdateException driverError = new BatchUpdateException("Simulated batch entry returning rows",
+                new int[] {1, 0, 0});
+        when(statement.executeBatch()).thenThrow(driverError);
+        FieldUtils.writeField(sink, "insertStatement", statement, true);
+        List<CompletableFuture<Boolean>> results = new ArrayList<>();
+        List<Record<GenericObject>> records = createRecords(3, results);
+
+        for (Record<GenericObject> record : records) {
+            sink.write(record);
+        }
+        awaitScheduledFlushes();
+
+        verify(sinkContext).fatal(driverError);
+        Assert.assertTrue(queue().isEmpty());
+        sink.close();
+        sink = null;
+        for (CompletableFuture<Boolean> result : results) {
+            Assert.assertFalse(result.isDone());
+        }
+    }
+
+    /**
+     * Test that a successful JDBC batch acks only its own records when the driver reports more
+     * update counts than records were batched, and does not report an error.
+     */
+    @Test
+    public void testExtraUpdateCountsAckOnlyBatchedRecords() throws Exception {
+        SinkContext sinkContext = mock(SinkContext.class);
+        Map<String, Object> conf = createConfig(4, -1);
+        conf.put("useJdbcBatch", true);
+        openSink(conf, sinkContext);
+        PreparedStatement statement = mock(PreparedStatement.class);
+        when(statement.executeBatch()).thenReturn(new int[] {1, 1, 1, 1, 1, 1});
+        FieldUtils.writeField(sink, "insertStatement", statement, true);
+        AtomicLong acked = new AtomicLong();
+        AtomicLong failed = new AtomicLong();
+        Record<GenericObject> record = createCountingRecord(acked, failed);
+
+        // The write() that completes the batch schedules the flush
+        queue().addAll(List.of(record, record, record));
+        sink.write(record);
+        awaitScheduledFlushes();
+
+        verify(sinkContext, never()).fatal(any(Throwable.class));
+        Assert.assertEquals(acked.get(), 4L);
+        Assert.assertEquals(failed.get(), 0L);
+        Assert.assertTrue(queue().isEmpty());
+        Assert.assertEquals(FieldUtils.readField(sink, "state", true).toString(), "OPEN");
+    }
+
+    /**
+     * Test that extra update counts reported for a JDBC batch do not ack a record of the round's
+     * next batch before it is written: when that batch then fails, its records are all failed.
+     */
+    @Test
+    public void testExtraUpdateCountsDoNotAckNextBatch() throws Exception {
+        SinkContext sinkContext = mock(SinkContext.class);
+        Map<String, Object> conf = createConfig(4, -1);
+        conf.put("useJdbcBatch", true);
+        openSink(conf, sinkContext);
+        PreparedStatement insertStatement = mock(PreparedStatement.class);
+        when(insertStatement.executeBatch()).thenReturn(new int[] {1, 1, 1});
+        FieldUtils.writeField(sink, "insertStatement", insertStatement, true);
+        PreparedStatement deleteStatement = mock(PreparedStatement.class);
+        when(deleteStatement.executeBatch()).thenReturn(new int[] {Statement.EXECUTE_FAILED, Statement.EXECUTE_FAILED});
+        FieldUtils.writeField(sink, "deleteStatement", deleteStatement, true);
+        AtomicLong insertsAcked = new AtomicLong();
+        AtomicLong insertsFailed = new AtomicLong();
+        AtomicLong deletesAcked = new AtomicLong();
+        AtomicLong deletesFailed = new AtomicLong();
+        Record<GenericObject> insert = createRecord(insertsAcked::incrementAndGet, insertsFailed::incrementAndGet);
+        Record<GenericObject> delete = createRecord("DELETE", deletesAcked::incrementAndGet,
+                deletesFailed::incrementAndGet);
+
+        // The write() that completes the batch schedules the flush: a JDBC batch of 2 inserts,
+        // then one of 2 deletes
+        queue().addAll(List.of(insert, insert, delete));
+        sink.write(delete);
+        awaitScheduledFlushes();
+
+        verify(sinkContext).fatal(any(SQLException.class));
+        Assert.assertEquals(insertsAcked.get(), 2L);
+        Assert.assertEquals(insertsFailed.get(), 0L);
+        Assert.assertEquals(deletesAcked.get(), 0L);
+        Assert.assertEquals(deletesFailed.get(), 2L);
+        Assert.assertTrue(queue().isEmpty());
+    }
+
+    /**
+     * Test a JDBC batch whose second insert violates the primary key, against the real SQLite
+     * driver under auto-commit. sqlite-jdbc throws a plain SQLException, not a
+     * BatchUpdateException, after committing the first insert. Without update counts, the sink
+     * cannot tell which records were written: none of the batch is acked or failed, not even by
+     * close(), so that they are redelivered in order after fatal() restarts the instance.
+     */
+    @Test
+    public void testFailedSqliteBatchUnderAutoCommitLeavesBatchUnacked() throws Exception {
+        SinkContext sinkContext = mock(SinkContext.class);
+        Map<String, Object> conf = createConfig(3, -1);
+        conf.put("useJdbcBatch", true);
+        conf.put("useTransactions", false);
+        openSink(conf, sinkContext);
+        List<CompletableFuture<Boolean>> results = new ArrayList<>();
+        List<Record<GenericObject>> records = new ArrayList<>();
+        for (Foo foo : List.of(new Foo("k1", "first", 1), new Foo("k1", "duplicate", 2), new Foo("k3", "third", 3))) {
+            CompletableFuture<Boolean> result = new CompletableFuture<>();
+            results.add(result);
+            records.add(SqliteJdbcSinkTest.createMockFooRecord(foo, new HashMap<>(), result));
+        }
+
+        for (Record<GenericObject> record : records) {
+            sink.write(record);
+        }
+        awaitScheduledFlushes();
+
+        ArgumentCaptor<Throwable> fatalError = ArgumentCaptor.forClass(Throwable.class);
+        verify(sinkContext).fatal(fatalError.capture());
+        Throwable cause = fatalError.getValue();
+        Assert.assertTrue(cause instanceof SQLException, "fatal() called with " + cause);
+        Assert.assertFalse(cause instanceof BatchUpdateException, "fatal() called with " + cause);
+        // The first insert was committed before the batch failed
+        List<String> stored = new ArrayList<>();
+        sqliteUtils.select("SELECT field1, field2 FROM " + TABLE_NAME,
+                rs -> stored.add(rs.getString(1) + "=" + rs.getString(2)));
+        Assert.assertEquals(stored, List.of("k1=first"));
+        Assert.assertTrue(queue().isEmpty());
+
+        sink.close();
+        sink = null;
+        for (CompletableFuture<Boolean> result : results) {
+            Assert.assertFalse(result.isDone());
+        }
     }
 
     @DataProvider(name = "committingFlushes")
@@ -1185,7 +1491,21 @@ public class SqliteJdbcSinkQueueTest {
     }
 
     private void openSink(Map<String, Object> conf, SinkContext sinkContext) throws Exception {
-        sink = new SqliteJdbcAutoSchemaSink();
+        openSink(conf, sinkContext, true);
+    }
+
+    /**
+     * Open a sink that trusts, or not, its driver's update counts of a failed batch. The mocked
+     * statements of these tests report the counts of a driver that does, such as pgjdbc.
+     */
+    private void openSink(Map<String, Object> conf, SinkContext sinkContext, boolean trustsUpdateCounts)
+            throws Exception {
+        sink = trustsUpdateCounts ? new SqliteJdbcAutoSchemaSink() {
+            @Override
+            protected boolean reportsCommittedItemsOfFailedBatch() {
+                return true;
+            }
+        } : new SqliteJdbcAutoSchemaSink();
         sink.open(conf, sinkContext);
     }
 
