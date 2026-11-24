@@ -59,9 +59,14 @@ public class HdfsSinkConfig extends AbstractHdfsConfig implements Serializable {
     private char separator;
 
     /**
-     * The interval (in milliseconds) between calls to flush data to HDFS disk.
+     * The interval (in milliseconds) between calls to flush data to HDFS disk. Records are acked
+     * once the sync that covers them completes, so a record can wait up to one interval for its ack.
+     * Default is 1000. A shorter interval acks records sooner, but calls {@code hsync()} on HDFS more
+     * often, and makes compressed text files larger: each sync ends a compressed stream, and short
+     * streams compress less well. 0 syncs as soon as records are queued, checking for them every
+     * millisecond.
      */
-    private long syncInterval;
+    private long syncInterval = 1000L;
 
     /**
      * The maximum number of records that we hold in memory before acking. Default is Integer.MAX_VALUE.
