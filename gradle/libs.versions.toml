@@ -166,7 +166,7 @@ zstd-jni = "1.5.7-3"
 lz4java = "1.10.3"
 spring = "6.2.12"
 # Connectors / IO
-kafka-client = "4.1.1"
+kafka-client = "4.3.1"
 confluent = "8.1.1"
 opensearch = "2.19.4"
 elasticsearch-java = "8.15.3"
