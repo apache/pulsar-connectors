@@ -514,23 +514,27 @@ public class SqliteJdbcSinkQueueTest {
     public Object[][] partlyFailedJdbcBatches() {
         // useTransactions, whether executeBatch() throws a BatchUpdateException (the driver
         // stopped at the failed item) rather than returning EXECUTE_FAILED for it
-        return new Object[][] {{false, false}, {false, true}, {true, false}, {true, true}};
+        // and whether the sink trusts the driver's update counts of a failed batch
+        return new Object[][] {{false, false, true}, {false, true, true}, {true, false, true}, {true, true, true},
+                {false, false, false}, {false, true, false}};
     }
 
     /**
      * Test a JDBC batch whose second item fails. Under auto-commit, the items the driver reports
      * as successful before the failed one may be committed: they are acked, and the other records
      * of the batch are neither acked nor failed, not even by close(), so that they are redelivered
-     * in order after fatal() restarts the instance. With transactions, the batch is rolled back
-     * and all of its records are failed.
+     * in order after fatal() restarts the instance. A sink that does not trust its driver's update
+     * counts of a failed batch acks none of them. With transactions, the batch is rolled back and
+     * all of its records are failed.
      */
     @Test(dataProvider = "partlyFailedJdbcBatches")
-    public void testPartlyFailedJdbcBatch(boolean useTransactions, boolean batchUpdateException) throws Exception {
+    public void testPartlyFailedJdbcBatch(boolean useTransactions, boolean batchUpdateException,
+                                          boolean trustsUpdateCounts) throws Exception {
         SinkContext sinkContext = mock(SinkContext.class);
         Map<String, Object> conf = createConfig(3, -1);
         conf.put("useJdbcBatch", true);
         conf.put("useTransactions", useTransactions);
-        openSink(conf, sinkContext);
+        openSink(conf, sinkContext, trustsUpdateCounts);
         PreparedStatement statement = mock(PreparedStatement.class);
         BatchUpdateException driverError = new BatchUpdateException("Simulated failed batch item", new int[] {1});
         if (batchUpdateException) {
@@ -565,7 +569,11 @@ public class SqliteJdbcSinkQueueTest {
                 Assert.assertFalse(result.get(1, TimeUnit.SECONDS));
             }
         } else {
-            Assert.assertTrue(results.get(0).get(1, TimeUnit.SECONDS));
+            if (trustsUpdateCounts) {
+                Assert.assertTrue(results.get(0).get(1, TimeUnit.SECONDS));
+            } else {
+                Assert.assertFalse(results.get(0).isDone());
+            }
             Assert.assertFalse(results.get(1).isDone());
             Assert.assertFalse(results.get(2).isDone());
         }
@@ -1483,7 +1491,21 @@ public class SqliteJdbcSinkQueueTest {
     }
 
     private void openSink(Map<String, Object> conf, SinkContext sinkContext) throws Exception {
-        sink = new SqliteJdbcAutoSchemaSink();
+        openSink(conf, sinkContext, true);
+    }
+
+    /**
+     * Open a sink that trusts, or not, its driver's update counts of a failed batch. The mocked
+     * statements of these tests report the counts of a driver that does, such as pgjdbc.
+     */
+    private void openSink(Map<String, Object> conf, SinkContext sinkContext, boolean trustsUpdateCounts)
+            throws Exception {
+        sink = trustsUpdateCounts ? new SqliteJdbcAutoSchemaSink() {
+            @Override
+            protected boolean reportsCommittedItemsOfFailedBatch() {
+                return true;
+            }
+        } : new SqliteJdbcAutoSchemaSink();
         sink.open(conf, sinkContext);
     }
 

@@ -89,10 +89,11 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
     private static final long MIN_CLOSE_FLUSH_WAIT_MS = 5000;
     // How long close() waits for an interrupted flush to stop
     private static final long CLOSE_INTERRUPTED_FLUSH_WAIT_MS = 1000;
-    // How many exceptions thrown by Record.fail() failRecords() adds to a flush error as suppressed,
-    // across calls. Under EFFECTIVELY_ONCE every fail() throws: without a cap, the error logged and
-    // passed to SinkContext.fatal() would carry one stack trace per failed record. Errors thrown by
-    // fail() are always added.
+    // The number of suppressed exceptions a flush error may already hold for failRecords() to add
+    // one more thrown by Record.fail(); the cap counts everything suppressed on the error, also
+    // what was added before failRecords() was called. Under EFFECTIVELY_ONCE every fail() throws:
+    // without a cap, the error logged and passed to SinkContext.fatal() would carry one stack trace
+    // per failed record. Errors thrown by fail() are always added.
     private static final int MAX_SUPPRESSED_FAIL_ERRORS = 5;
 
     protected JdbcUtils.TableDefinition tableDefinition;
@@ -755,7 +756,8 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
      * Execute the JDBC batch of the first {@code batched} records of {@code swapList}, then ack
      * them, or throw if the batch failed. With transactions, a failed batch is rolled back and its
      * records are failed. Under auto-commit, its items may be partly committed, so only the leading
-     * items the driver reports as successful are acked: see {@link #ackLeadingSuccesses}. The
+     * items the driver reports as successful are acked, if the sink trusts its driver's update counts:
+     * see {@link #ackLeadingSuccesses} and {@link #reportsCommittedItemsOfFailedBatch}. The
      * number of update counts the driver returns is not trusted to match {@code batched}: acking
      * more records would ack records of the round's next batch, which is not written yet.
      */
@@ -821,7 +823,8 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
      * report fewer update counts, or continue and report {@link Statement#EXECUTE_FAILED}: in both
      * cases the leading successful items are the ones before the first failure. If the counts
      * show no failed item among the records of the batch, which items failed is unknown, and none
-     * is acked.
+     * is acked. Nothing is acked either unless {@link #reportsCommittedItemsOfFailedBatch} confirms
+     * that the driver's counts match what it committed.
      *
      * @param updateCounts the update counts the driver reported, or null if unknown
      * @param batched the number of records of the batch, the first ones in {@code swapList}
@@ -831,7 +834,8 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
     private void ackLeadingSuccesses(Deque<Record<T>> swapList, int[] updateCounts, int batched,
                                      SQLException batchError) {
         int succeeded = 0;
-        if (updateCounts != null) {
+        boolean known = updateCounts != null && reportsCommittedItemsOfFailedBatch();
+        if (known) {
             while (succeeded < batched && succeeded < updateCounts.length
                     && !isBatchItemFailed(updateCounts[succeeded])) {
                 succeeded++;
@@ -841,6 +845,7 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
             // The batch failed, but no item of it is reported as failed. sqlite-jdbc, for example,
             // reports 0 for an entry that returned rows and for every entry after it.
             succeeded = 0;
+            known = false;
         }
         try {
             // Removes the first succeeded records, even when ack() throws
@@ -849,8 +854,26 @@ public abstract class JdbcAbstractSink<T> implements Sink<T> {
             batchError.addSuppressed(ackError);
         }
         int unacked = removeWithoutAck(swapList, batched - succeeded);
-        log.warn("JDBC batch failed under auto-commit after {} successful item(s), leaving the {} other "
-                + "record(s) of the batch unacked to be redelivered", succeeded, unacked);
+        if (known) {
+            log.warn("JDBC batch failed under auto-commit after {} successful item(s), leaving the {} other "
+                    + "record(s) of the batch unacked to be redelivered", succeeded, unacked);
+        } else {
+            log.warn("JDBC batch failed under auto-commit, and which of its items were written is unknown: "
+                    + "some may be committed. Leaving its {} record(s) unacked to be redelivered", unacked);
+        }
+    }
+
+    /**
+     * Whether, under auto-commit, the update counts of a failed JDBC batch tell which of its items
+     * the driver committed: the items before the first failed one are committed, and no other.
+     * The JDBC specification leaves this to the driver. A driver that rolls back the whole batch,
+     * or sends it as one statement, could report successful counts for items it did not write,
+     * and acking them would lose those records. Only a sink whose driver is known to behave this
+     * way returns true; by default, no record of a failed batch is acked, and all of them are
+     * redelivered.
+     */
+    protected boolean reportsCommittedItemsOfFailedBatch() {
+        return false;
     }
 
     private static boolean isBatchItemFailed(int returnCode) {
