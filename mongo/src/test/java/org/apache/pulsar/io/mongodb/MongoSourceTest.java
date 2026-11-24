@@ -114,6 +114,7 @@ public class MongoSourceTest {
                 OperationType.INSERT.getValue(),
                 BsonDocument.parse("{token: true}"),
                 BsonDocument.parse("{db: \"hello\", coll: \"pulsar\"}"),
+                null, // namespaceType, added in driver 5.14
                 BsonDocument.parse("{db: \"hello2\", coll: \"pulsar2\"}"),
                 new Document("hello", "pulsar"),
                 new Document("hello", "pulsar"), // documentKey
