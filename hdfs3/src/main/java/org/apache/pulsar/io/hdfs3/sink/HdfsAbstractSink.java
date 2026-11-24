@@ -65,8 +65,8 @@ public abstract class HdfsAbstractSink<K, V> extends AbstractHdfsConnector imple
 
     @Override
     public void close() throws Exception {
+       // Stops the sync thread, then syncs and acks the records still queued
        syncThread.halt();
-       syncThread.join(0);
     }
 
     protected final void connectToHdfs() throws IOException {

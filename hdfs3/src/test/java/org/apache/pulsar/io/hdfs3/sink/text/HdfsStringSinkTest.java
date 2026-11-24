@@ -31,7 +31,7 @@ public class HdfsStringSinkTest extends AbstractHdfsSinkTest<String, String> {
         sink = new HdfsStringSink();
     }
 
-    @Test
+    @Test(timeOut = 120_000)
     public final void write5000Test() throws Exception {
         map.put("filenamePrefix", "write5000Test");
         map.put("fileExtension", ".txt");
@@ -42,7 +42,7 @@ public class HdfsStringSinkTest extends AbstractHdfsSinkTest<String, String> {
         verify(mockRecord, times(5000)).ack();
     }
 
-    @Test
+    @Test(timeOut = 120_000)
     public final void fiveByTwoThousandTest() throws Exception {
         map.put("filenamePrefix", "fiveByTwoThousandTest");
         map.put("fileExtension", ".txt");
@@ -56,7 +56,7 @@ public class HdfsStringSinkTest extends AbstractHdfsSinkTest<String, String> {
         verify(mockRecord, times(2000 * 5)).ack();
     }
 
-    @Test
+    @Test(timeOut = 120_000)
     public final void tenSecondTest() throws Exception {
         map.put("filenamePrefix", "tenSecondTest");
         map.put("fileExtension", ".txt");
@@ -66,7 +66,7 @@ public class HdfsStringSinkTest extends AbstractHdfsSinkTest<String, String> {
         sink.close();
     }
 
-    @Test
+    @Test(timeOut = 120_000)
     public final void maxPendingRecordsTest() throws Exception {
         map.put("filenamePrefix", "maxPendingRecordsTest");
         map.put("fileExtension", ".txt");
@@ -77,7 +77,7 @@ public class HdfsStringSinkTest extends AbstractHdfsSinkTest<String, String> {
         sink.close();
     }
 
-    @Test
+    @Test(timeOut = 120_000)
     public final void bzip2CompressionTest() throws Exception {
         map.put("filenamePrefix", "bzip2CompressionTest");
         map.put("compression", "BZIP2");
@@ -89,7 +89,7 @@ public class HdfsStringSinkTest extends AbstractHdfsSinkTest<String, String> {
         verify(mockRecord, times(5000)).ack();
     }
 
-    @Test
+    @Test(timeOut = 120_000)
     public final void deflateCompressionTest() throws Exception {
         map.put("filenamePrefix", "deflateCompressionTest");
         map.put("compression", "DEFLATE");
@@ -101,7 +101,7 @@ public class HdfsStringSinkTest extends AbstractHdfsSinkTest<String, String> {
         verify(mockRecord, times(50000)).ack();
     }
 
-    @Test
+    @Test(timeOut = 120_000)
     public final void zStandardCompressionTest() throws Exception {
         if (System.getenv("LD_LIBRARY_PATH") == null) {
             throw new SkipException("Skip zStandardCompressionTest since LD_LIBRARY_PATH is not set");

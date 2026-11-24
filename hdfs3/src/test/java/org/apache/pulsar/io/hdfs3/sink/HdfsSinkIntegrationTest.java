@@ -193,8 +193,7 @@ public class HdfsSinkIntegrationTest {
         config.put("encoding", "UTF-8");
         // A sync interval long enough that the background thread does not tick before we close()
         // (enqueuing the records takes milliseconds), so close() runs the final hsync()/ack path
-        // with records still queued — the bug scenario. Kept small because close() joins the sync
-        // thread, which sleeps this long before exiting, so it directly adds to the suite runtime.
+        // with records still queued — the bug scenario.
         config.put("syncInterval", 1_000L);
 
         SinkContext sinkContext = mock(SinkContext.class);
