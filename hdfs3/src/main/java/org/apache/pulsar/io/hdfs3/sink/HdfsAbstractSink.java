@@ -28,6 +28,7 @@ import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FSDataOutputStreamBuilder;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.fs.Syncable;
 import org.apache.hadoop.fs.permission.FsAction;
 import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.pulsar.functions.api.Record;
@@ -113,8 +114,32 @@ public abstract class HdfsAbstractSink<K, V> extends AbstractHdfsConnector imple
         return path;
     }
 
+    /**
+     * Push the bytes of the records written so far, which the sink may still buffer on top of the
+     * HDFS stream, into that stream, so that the next {@code hsync()} of the stream covers them. The
+     * sync thread calls it before each {@code hsync()}, and acks records only after both. Does
+     * nothing by default, for sinks that write straight to the stream.
+     */
+    protected void flushBuffers() throws IOException {
+    }
+
     protected final void launchSyncThread() throws IOException {
-        syncThread = new HdfsSyncThread<V>(getHdfsStream(), unackedRecords, hdfsSinkConfig.getSyncInterval());
+        FSDataOutputStream stream = getHdfsStream();
+        // What the sync thread syncs before it acks records: the sink's buffers, then the stream
+        Syncable syncable = new Syncable() {
+            @Override
+            public void hflush() throws IOException {
+                flushBuffers();
+                stream.hflush();
+            }
+
+            @Override
+            public void hsync() throws IOException {
+                flushBuffers();
+                stream.hsync();
+            }
+        };
+        syncThread = new HdfsSyncThread<V>(syncable, unackedRecords, hdfsSinkConfig.getSyncInterval());
         syncThread.start();
     }
 }

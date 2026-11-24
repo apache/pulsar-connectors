@@ -23,7 +23,9 @@ import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.io.File;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
@@ -39,12 +41,15 @@ import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
+import org.apache.hadoop.io.compress.CompressionCodec;
+import org.apache.hadoop.io.compress.CompressionCodecFactory;
 import org.apache.pulsar.functions.api.Record;
 import org.apache.pulsar.io.core.SinkContext;
 import org.apache.pulsar.io.hdfs3.sink.text.HdfsStringSink;
 import org.testng.Assert;
 import org.testng.annotations.AfterClass;
 import org.testng.annotations.BeforeClass;
+import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
 /**
@@ -232,28 +237,110 @@ public class HdfsSinkIntegrationTest {
         }
     }
 
+    @DataProvider
+    public Object[][] compressions() {
+        // LZ4 needs lz4-java, which is not on this module's classpath, and ZSTANDARD needs the
+        // native Hadoop library
+        return new Object[][] {{null}, {"GZIP"}, {"BZIP2"}, {"DEFLATE"}, {"SNAPPY"}};
+    }
+
+    /**
+     * A record must be acked only once its bytes are on HDFS, so every acked record must be readable
+     * from HDFS while the sink is still open. The sink used to ack records whose bytes were still
+     * in the writer's buffers or in the compressor, and only close() wrote them out.
+     */
+    @Test(timeOut = 300_000, dataProvider = "compressions")
+    public void testAckedRecordsAreReadableBeforeClose(String compression) throws Exception {
+        String directory = "/hdfs-sink-acked-records-test-" + (compression == null ? "none" : compression);
+        List<String> values = new ArrayList<>();
+        for (int i = 0; i < 25; i++) {
+            values.add("acked-record-" + i);
+        }
+        StringBuilder expected = new StringBuilder();
+        for (String value : values) {
+            expected.append(value).append(SEPARATOR);
+        }
+
+        Map<String, Object> config = new HashMap<>();
+        config.put("hdfsConfigResources", coreSite.getAbsolutePath());
+        config.put("directory", directory);
+        config.put("filenamePrefix", FILENAME_PREFIX);
+        config.put("fileExtension", FILE_EXTENSION);
+        config.put("separator", SEPARATOR);
+        config.put("encoding", "UTF-8");
+        config.put("syncInterval", 200L);
+        if (compression != null) {
+            config.put("compression", compression);
+        }
+
+        AtomicInteger ackCount = new AtomicInteger(0);
+        HdfsStringSink sink = new HdfsStringSink();
+        sink.open(config, mock(SinkContext.class));
+        boolean closed = false;
+        try {
+            for (String value : values) {
+                sink.write(mockRecord(value, ackCount));
+            }
+            await().atMost(60, TimeUnit.SECONDS).pollInterval(100, TimeUnit.MILLISECONDS)
+                    .untilAsserted(() -> Assert.assertEquals(ackCount.get(), values.size()));
+
+            // The file is still open: read what HDFS makes visible of it, up to the last complete
+            // compressed stream
+            Assert.assertEquals(readSinkOutput(directory, compression, true), expected.toString(),
+                    "every acked record must be readable from HDFS before close()");
+
+            sink.close();
+            closed = true;
+            Assert.assertEquals(readSinkOutput(directory, compression, false), expected.toString(),
+                    "the closed file must decode to every record");
+        } finally {
+            if (!closed) {
+                try {
+                    sink.close();
+                } catch (Exception e) {
+                    log.warn("Failed to close sink on the error path", e);
+                }
+            }
+        }
+    }
+
+    private String readSinkOutput(String directory) throws Exception {
+        return readSinkOutput(directory, null, false);
+    }
+
     /**
      * Reads and concatenates the content of every file the sink produced under {@code directory}
      * on the mini cluster's filesystem, matching files whose name starts with
-     * {@link #FILENAME_PREFIX}.
+     * {@link #FILENAME_PREFIX}, and decompresses it with the codec named {@code compression}, if
+     * any. If {@code partial}, stops without failing where the content ends early, as in a file
+     * that is still being written.
      */
-    private String readSinkOutput(String directory) throws Exception {
+    private String readSinkOutput(String directory, String compression, boolean partial) throws Exception {
         Path dir = new Path(directory);
         if (!clusterFs.exists(dir)) {
             return "";
         }
+        CompressionCodec codec = compression == null ? null
+                : new CompressionCodecFactory(clusterFs.getConf()).getCodecByName(compression);
         StringBuilder content = new StringBuilder();
         for (FileStatus status : clusterFs.listStatus(dir)) {
             String name = status.getPath().getName();
             if (!status.isFile() || !name.startsWith(FILENAME_PREFIX)) {
                 continue;
             }
-            try (FSDataInputStream in = clusterFs.open(status.getPath())) {
+            try (FSDataInputStream raw = clusterFs.open(status.getPath());
+                 InputStream in = codec == null ? raw : codec.createInputStream(raw)) {
                 ByteArrayOutputStream out = new ByteArrayOutputStream();
                 byte[] buffer = new byte[4096];
                 int read;
-                while ((read = in.read(buffer)) != -1) {
-                    out.write(buffer, 0, read);
+                try {
+                    while ((read = in.read(buffer)) != -1) {
+                        out.write(buffer, 0, read);
+                    }
+                } catch (IOException e) {
+                    if (!partial) {
+                        throw e;
+                    }
                 }
                 content.append(new String(out.toByteArray(), StandardCharsets.UTF_8));
             }
