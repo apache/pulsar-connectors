@@ -40,6 +40,10 @@ public class HdfsSyncThread<V> extends Thread {
 
     private static final Logger LOG = LoggerFactory.getLogger(HdfsSyncThread.class);
 
+    // The shortest wait between two passes, so that a sync interval of 0 doesn't keep a core busy
+    // checking an empty queue
+    private static final long MIN_SYNC_INTERVAL_MS = 1;
+
     private final Syncable stream;
     private final BlockingQueue<Record<V>> unackedRecords;
     private final long syncInterval;
@@ -50,7 +54,7 @@ public class HdfsSyncThread<V> extends Thread {
     public HdfsSyncThread(Syncable stream, BlockingQueue<Record<V>> unackedRecords, long syncInterval) {
       this.stream = stream;
       this.unackedRecords = unackedRecords;
-      this.syncInterval = syncInterval;
+      this.syncInterval = Math.max(syncInterval, MIN_SYNC_INTERVAL_MS);
     }
 
     @Override

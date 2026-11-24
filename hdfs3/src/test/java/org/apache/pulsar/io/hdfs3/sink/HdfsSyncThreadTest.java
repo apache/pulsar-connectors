@@ -24,6 +24,8 @@ import static org.testng.Assert.assertNull;
 import static org.testng.Assert.assertTrue;
 import java.io.IOException;
 import java.io.InterruptedIOException;
+import java.lang.management.ManagementFactory;
+import java.lang.management.ThreadMXBean;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.BlockingQueue;
@@ -35,6 +37,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.apache.hadoop.fs.Syncable;
 import org.apache.pulsar.functions.api.Record;
 import org.awaitility.Awaitility;
+import org.testng.SkipException;
 import org.testng.annotations.AfterMethod;
 import org.testng.annotations.Test;
 
@@ -180,6 +183,50 @@ public class HdfsSyncThreadTest {
             // The first sync failed, so the ack came after a later, successful one
             assertTrue(record.syncsBeforeAck >= 1);
         }
+    }
+
+    @Test(timeOut = 30_000)
+    public void testZeroIntervalAcksQueuedRecords() throws Exception {
+        stream = new FakeStream(false, false);
+        BlockingQueue<Record<String>> queue = new LinkedBlockingQueue<>();
+        List<TestRecord> records = records(3, 0);
+        syncThread = start(queue, 0);
+
+        queue.addAll(records);
+        Awaitility.await().atMost(10, TimeUnit.SECONDS).until(queue::isEmpty);
+        syncThread.halt();
+
+        for (TestRecord record : records) {
+            assertEquals(record.acks.get(), 1);
+            assertTrue(record.syncsBeforeAck >= 1);
+        }
+    }
+
+    /**
+     * With a sync interval of 0, the thread used to check the queue again right away, and so kept a
+     * core busy for as long as the sink was open, even with nothing to sync.
+     */
+    @Test(timeOut = 30_000)
+    public void testZeroIntervalDoesNotSpinOnAnEmptyQueue() throws Exception {
+        ThreadMXBean threads = ManagementFactory.getThreadMXBean();
+        if (!threads.isThreadCpuTimeSupported() || !threads.isThreadCpuTimeEnabled()) {
+            throw new SkipException("Thread CPU time can't be measured on this JVM");
+        }
+        stream = new FakeStream(false, false);
+        syncThread = start(new LinkedBlockingQueue<>(), 0);
+
+        long cpuBefore = threads.getThreadCpuTime(syncThread.getId());
+        long wallBefore = System.nanoTime();
+        Thread.sleep(1_000);
+        long cpu = threads.getThreadCpuTime(syncThread.getId()) - cpuBefore;
+        long wall = System.nanoTime() - wallBefore;
+        syncThread.halt();
+
+        // A spinning thread uses about as much CPU time as it runs; one that waits between checks,
+        // a small fraction of it
+        assertTrue(cpu < wall / 5, "the sync thread used " + TimeUnit.NANOSECONDS.toMillis(cpu)
+                + " ms of CPU time in " + TimeUnit.NANOSECONDS.toMillis(wall) + " ms");
+        assertEquals(stream.startedSyncs.get(), 0);
     }
 
     private HdfsSyncThread<String> start(BlockingQueue<Record<String>> queue, long syncInterval) {

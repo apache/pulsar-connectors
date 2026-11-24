@@ -102,6 +102,33 @@ public class HdfsSinkConfigTest {
         config.validate();
     }
 
+    @Test
+    public final void defaultSyncIntervalTest() throws IOException {
+        Map<String, Object> map = new HashMap<String, Object> ();
+        map.put("hdfsConfigResources", "core-site.xml");
+        map.put("directory", "/foo/bar");
+        map.put("filenamePrefix", "prefix");
+        map.put("fileExtension", ".txt");
+
+        HdfsSinkConfig config = HdfsSinkConfig.load(map);
+        config.validate();
+        assertEquals(config.getSyncInterval(), 1000L);
+    }
+
+    @Test
+    public final void zeroSyncIntervalTest() throws IOException {
+        Map<String, Object> map = new HashMap<String, Object> ();
+        map.put("hdfsConfigResources", "core-site.xml");
+        map.put("directory", "/foo/bar");
+        map.put("filenamePrefix", "prefix");
+        map.put("fileExtension", ".txt");
+        map.put("syncInterval", 0);
+
+        HdfsSinkConfig config = HdfsSinkConfig.load(map);
+        config.validate();
+        assertEquals(config.getSyncInterval(), 0L);
+    }
+
     @Test(expectedExceptions = IllegalArgumentException.class,
             expectedExceptionsMessageRegExp = "Sync Interval cannot be negative")
     public final void invalidSyncIntervalTest() throws IOException {
