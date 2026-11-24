@@ -34,7 +34,7 @@ public class HdfsSequentialSinkTest extends AbstractHdfsSinkTest<Long, String> {
         sink = new HdfsSequentialTextSink();
     }
 
-    @Test
+    @Test(timeOut = 120_000)
     public final void write100Test() throws Exception {
         map.put("filenamePrefix", "write100Test-seq");
         map.put("fileExtension", ".seq");
@@ -50,7 +50,7 @@ public class HdfsSequentialSinkTest extends AbstractHdfsSinkTest<Long, String> {
         sink.close();
     }
 
-    @Test
+    @Test(timeOut = 120_000)
     public final void write5000Test() throws Exception {
         map.put("filenamePrefix", "write5000Test-seq");
         map.put("fileExtension", ".seq");
@@ -66,7 +66,7 @@ public class HdfsSequentialSinkTest extends AbstractHdfsSinkTest<Long, String> {
         sink.close();
     }
 
-    @Test
+    @Test(timeOut = 120_000)
     public final void tenSecondTest() throws Exception {
         map.put("filenamePrefix", "tenSecondTest-seq");
         map.put("fileExtension", ".seq");
@@ -76,7 +76,7 @@ public class HdfsSequentialSinkTest extends AbstractHdfsSinkTest<Long, String> {
         sink.close();
     }
 
-    @Test
+    @Test(timeOut = 120_000)
     public final void bzip2CompressionTest() throws Exception {
         map.put("filenamePrefix", "bzip2CompressionTest-seq");
         map.put("compression", "BZIP2");
@@ -87,7 +87,7 @@ public class HdfsSequentialSinkTest extends AbstractHdfsSinkTest<Long, String> {
         verify(mockRecord, times(5000)).ack();
     }
 
-    @Test
+    @Test(timeOut = 120_000)
     public final void deflateCompressionTest() throws Exception {
         map.put("filenamePrefix", "deflateCompressionTest-seq");
         map.put("compression", "DEFLATE");
@@ -98,7 +98,7 @@ public class HdfsSequentialSinkTest extends AbstractHdfsSinkTest<Long, String> {
         verify(mockRecord, times(5000)).ack();
     }
 
-    @Test
+    @Test(timeOut = 120_000)
     public final void zStandardCompressionTest() throws Exception {
         if (System.getenv("LD_LIBRARY_PATH") == null) {
             throw new SkipException("Skip zStandardCompressionTest since LD_LIBRARY_PATH is not set");
